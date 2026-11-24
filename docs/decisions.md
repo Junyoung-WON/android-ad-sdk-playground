@@ -1,6 +1,6 @@
 # 의사결정·실험 기록
 
-최종 내용 갱신일: 2026-11-21
+최종 내용 갱신일: 2026-11-24
 
 현재 계약·범위의 정본은 [요구사항](requirements.md), 현재 진행 상태의 정본은 [프로젝트 맥락](project-context.md)이다. 이 문서는 판단 근거와 의미 있는 실험 결과를 남긴다. 모든 대화·명령·커밋을 그대로 복사하는 일지는 아니다.
 
@@ -55,6 +55,72 @@
 - 다음 질문: 로드 완료에 포함할 준비 범위, 로드 중 재요청, 해제 이후 호출·콜백, 테스트에서 제어할 서버 응답을 어떻게 계약으로 정의할 것인가?
 - 관련: [README](../README.md), [요구사항](requirements.md), [현재 상태](project-context.md). 초기 세팅 검증 시점에는 커밋·푸시를 수행하지 않았다. 후속 사용자 요청에 따라 세팅 파일·검증 결과·관련 문서를 첫 커밋에 포함하며, 실제 커밋 결과는 Git 이력으로 확인한다.
 - 일차 자료: [Android Library와 앱 모듈 의존성](https://developer.android.com/studio/projects/android-library), [AGP 8.11의 Gradle·JDK·API 호환 조건](https://developer.android.com/build/releases/agp-8-11-0-release-notes), [Kotlin Gradle Plugin 호환 표](https://kotlinlang.org/docs/gradle-configure-project.html). 실제 Core 버전 충돌 판단은 빌드 오류를 근거로 했다.
+
+## D-005 — 첫 이미지 배너의 로드·표시·해제
+
+- 날짜: 2026-11-22
+- 상태: 적용·검증 — 사용자가 첫 기능 브랜치에서 작업 시작을 요청했다. 로드·표시 API 분리는 사용자 선택이며, 그 외 아래 정책은 이번 구현의 초기 선택이다.
+- 문제·주체: 연동 개발자가 광고 데이터 수신과 이미지 준비 완료를 혼동하지 않고 표시 시점을 제어해야 한다. 이전 요청이나 화면 사용 종료 후의 결과가 현재 View·콜백에 반영되면 호스트 화면 상태를 깨뜨린다.
+- 책임: SDK는 요청·응답 검증·이미지 준비·명시적 View 반영·결과 알림·해제를 맡는다. 호스트는 로드·표시 시점과 사용 기간을 정하고, 모의 서버는 지면 하나의 광고·실패 응답을 공급한다. 노출·클릭·트래킹은 후속 기능이다.
+- API 대안: `load()` 후 자동 반영은 연동이 간단하지만, 사용자는 준비 후 별도 `show()`로 표시 시점을 제어하는 방식을 선택했다. 상태·사용 순서 설명이 추가로 필요하므로 준비 전 `show()`는 false, 준비 후에는 이미지 바인딩 결과만 반환하도록 정했다. 가시성·노출 성공으로 표현하지 않는다.
+- 재요청·해제 선택: 새 `load()`는 이전 작업·이미지를 버리고 교체한다. 최신 요청만 결과를 전달하도록 취소와 요청 세대 확인을 함께 사용했다. `destroy()`는 최종·멱등 동작이며 이후 로드는 무시한다. 공개 호출과 콜백은 메인 스레드로 한정했다. 상세 정본은 [요구사항](requirements.md#첫-배너에-적용한-계약)이다.
+- 최소 구조: 공개 View·요청·리스너·오류 모델, Android와 분리된 준비 결과 세션, HTTP 소스·이미지 어댑터로 구성했다. 세션의 준비 함수·스코프를 테스트에서 제어해 취소를 무시하는 작업의 늦은 결과까지 검증한다. 호스트 전역 이미지 로더를 변경하지 않고 View가 자신의 로더·작업 수명을 소유한다.
+- 도구 선택: HTTP·연결·취소는 OkHttp 4.12.0, 디코딩·크기 조정은 Coil 2.7.0, 비동기는 Coroutines 1.10.2에 맡겼다. 두 필드 JSON은 kotlinx.serialization JSON 1.9.0의 트리 파싱을 사용해 별도 코드 생성 플러그인을 추가하지 않았다. 목표는 네트워크·디코더 재구현이 아니라 SDK 계약 검증이다. 캐시·복잡한 재시도 엔진은 만들지 않았다.
+- 모의 환경: Python 표준 라이브러리 서버가 `adId`·`imageUrl`, 합성 PNG와 실패 시나리오를 제공한다. 지면은 `demo-banner` 하나다. Debug 호스트의 루프백 HTTP 예외와 ADB reverse를 사용하며 SDK가 전역 보안 정책을 완화하지 않는다.
+- 발견·가설 수정: 초기의 “자동 재시도를 하지 않으려면 HTTP 연결 복구도 끈다”는 선택으로 Python 서버의 정상 이미지 로드가 `unexpected end of stream`으로 실패했다. 메타데이터 응답 후 닫힌 풀 연결 재사용이 원인이었다. 동일한 HTTP/1.0 연결 종료 조건을 기기 회귀 테스트로 만들었고 수정 전 실패를 확인했다. OkHttp 기본 연결 복구를 유지하도록 바꾼 뒤 회귀 테스트와 실제 Python 서버 연동이 성공했다. SDK의 자동 `load()` 재호출과 HTTP 연결 복구는 별개이며, 콜백 한 번이 HTTP 요청 한 번을 보장하지 않음을 계약에 남겼다.
+- 실제 검증: JBR 17.0.12/macOS ARM64, API 34 ARM64 에뮬레이터. SDK 단위 테스트 16개, 샘플 호스트 기기 통합 테스트 4개 통과. 최종 `testDebugUnitTest`·두 모듈 Debug 빌드·`connectedDebugAndroidTest`·두 모듈 `lintDebug`를 `--no-watch-fs`로 실행해 성공했다. Lint 오류 0개이며 SDK에는 새 버전 안내 경고 12개가 남는다. 샘플 Lint 이슈는 없다.
+- 실제 시연: Python 모의 서버·ADB reverse를 연결해 로드 완료 시 빈 배너 영역, 별도 표시 버튼 후 합성 이미지·광고 라벨을 캡처로 확인했다. 테스트는 실제 광고망 E2E가 아닌 로컬 HTTP·SDK·샘플 연동 검증이다. 테스트 서버의 `localhost`/허용 주소 불일치도 발견해 테스트 URL을 `127.0.0.1`로 맞췄다.
+- 한계·다음 질문: API 26·36 실행, R8 활성화·외부 AAR 소비, 화면 이동·회전·백그라운드의 전체 수명 시나리오는 미검증이다. 현재 View 바인딩과 실제 화면 표시·노출을 어떻게 구분할지, 호스트의 명시적 해제가 충분히 사용하기 쉬운지 추가 관찰한다. 로드·표시 분리만으로 별도 프리로드·만료·소비 정책을 완성한 것은 아니다.
+- 관련: [BannerAdView](../ad-sdk/src/main/java/io/github/junyoungwon/adsdk/BannerAdView.kt), [단위 테스트](../ad-sdk/src/test/java/io/github/junyoungwon/adsdk/internal/BannerLoadSessionTest.kt), [기기 통합 테스트](../sample-app/src/androidTest/java/io/github/junyoungwon/androidadsdkplayground/BannerIntegrationTest.kt), [연동·실행 가이드](../README.md). 당시 `feat/banner-load-and-display`의 변경은 미커밋이었으며 병합·푸시는 수행하지 않았다. 후속 커밋 정리는 D-009를 따른다.
+- 참고: [Android 코루틴 권장 사항](https://developer.android.com/kotlin/coroutines/coroutines-best-practices), [취소 가능한 콜백 연결](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/suspend-cancellable-coroutine.html), [Coil 2.7.0 ImageLoader 소스](https://github.com/coil-kt/coil/blob/2.7.0/coil-base/src/main/java/coil/ImageLoader.kt). 연결 복구 근거는 실제 사용한 OkHttp 4.12.0 Maven sources JAR의 `OkHttpClient.Builder.retryOnConnectionFailure` KDoc과 재현·수정 후 테스트 결과다.
+
+## D-006 — 사용자 코드 검토와 회전 실험 지원
+
+- 날짜: 2026-11-23
+- 상태: 코드 검토 피드백·실험 도구 적용. 재로드 중 기존 광고 유지 제안은 별도 변경으로 보류 — 사용자 선택.
+- 문제·주체: 사용자가 정상 흐름·기대 동작·테스트 주석을 작성했으나 실행 위치와 자원 소유권이 모호했고, 빠른 응답 때문에 로딩 중 회전을 재현하기 어려웠다.
+- 검토: suspend 호출이 자동으로 Default에서 실행되는 것은 아니다. 현재 View·세션·완료 콜백은 Main, HTTP 콜백·본문 읽기는 OkHttp 작업 스레드, JSON 파싱은 Default, Coil의 fetch·decode 기본 설정은 IO다. 처리 주체와 주입 자원의 수명 책임을 분리해 [학습 계획](learning-plan.md)에 정리했다. Coil 2.7.0 Maven sources JAR의 ImageLoader·DefaultRequestOptions를 확인한 코드 기반 설명이다.
+- 기대 동작 정정: destroy는 최종 해제이며 별도 취소 콜백을 내지 않는다. 보이지 않는 View가 메모리에 없다는 뜻은 아니며 현재 show는 가시성을 검사하지 않는다. onLoaded에서 샘플이 활성화하는 것은 표시 버튼이다. URL 구문·필드 오류와 유효한 URL의 이미지 다운로드·디코딩 실패를 구분한다.
+- 테스트 가독성: 기존 단위 16개·기기 4개 테스트 이름을 한글·밑줄로 변경하고 사용자 주석을 실제 assert 범위에 맞춰 보완했다. 응답 검증을 'HTTP 요청을 보내지 않음'과 구분하고, 준비 대역 테스트를 실제 이미지 렌더링 검증으로 표현하지 않았다. 이후 한글 테스트 작성 규칙을 지침에 반영했다.
+- 대안·선택: SDK 내부 대기를 추가하거나 제한 시간을 늘리면 검증 대상 동작까지 바뀐다. 모의 서버의 광고 데이터 응답을 delayMs=0~4000으로 제어하고 샘플 SeekBar에서 설정하도록 선택했다. slow의 기존 8초 시간 초과 조건은 유지했다. 회전 후 지연값을 복원하고, 화면별 ID와 BannerSample 로그로 요청·성공·실패·종료를 관찰한다.
+- 재로드 대안: 사용자는 기존 표시 A를 유지하고 준비된 B를 show할 때 교체하는 방안을 제안했다. 빈 영역을 줄일 수 있으나 현재 표시·새 준비 광고의 식별·수명·메모리와 show 결과를 구분해야 한다. 효과·노출·수익 유지까지 보장하는 제안은 아니다. 사용자는 이번에는 회전 실험을 먼저 하고 별도 정책 변경으로 진행하기로 선택했다. SDK의 재로드 즉시 제거 계약은 바꾸지 않았다.
+- 실제 검증: 단위 테스트 16개, API 34 ARM64 기기 테스트 5개 통과. 추가 기기 테스트는 응답을 gate로 대기시켜 ActivityScenario.recreate()를 수행하고, 이전 Activity 종료·이전 리스너 결과 없음·이전 View의 추가 load 무시·새 View 재로드·지연 설정 복원을 확인했다. URL 헬퍼의 MockWebServer.url()이 메인에서 역방향 호스트명 조회를 유발한 테스트 인프라 문제를 발견해 루프백 HttpUrl을 직접 조립하도록 수정했다. Debug APK 빌드·두 모듈 Lint 오류 0개, SDK 버전 안내 경고 12개를 확인했다.
+- 모의 서버 검증: 기존 8080 프로세스를 유지한 채 새 코드를 8081에서 실행했다. delayMs=0은 약 10ms, 500은 약 507ms에 응답했고 잘못된 지연값 세 종류는 HTTP 400이었다. 새 UI의 지연 제어·화면 ID 표시를 캡처로 확인했다.
+- 한계·다음 판단: 자동 재생성 테스트는 물리적 방향 전환·모든 화면 수명·GC/메모리 누수 검증을 대신하지 않는다. 이전 리스너 미전달은 테스트 관찰 구간과 기존 세션 취소 테스트 근거로 평가한다. 사용자가 직접 회전 실험을 수행한 결과는 아직 받지 않았다. 서버 코드 변경은 실행 프로세스 재시작이 필요하다.
+- 관련: [샘플 화면](../sample-app/src/main/java/io/github/junyoungwon/androidadsdkplayground/MainActivity.kt), [모의 서버](../mock-server/server.py), [기기 테스트](../sample-app/src/androidTest/java/io/github/junyoungwon/androidadsdkplayground/BannerIntegrationTest.kt), [README](../README.md). 커밋·병합·푸시는 수행하지 않았다.
+
+## D-007 — 지연 설정을 무시하던 구버전 서버 프로세스
+
+- 날짜: 2026-11-23
+- 상태: 재현·환경 수정·재검증 완료.
+- 문제: 사용자는 3초 설정에도 표시 버튼이 거의 즉시 활성화된다고 보고했다. 앱 로그에서도 delay=3000ms 요청이 수십 ms 만에 성공했다.
+- 관찰·원인: 앱 기본 주소 8080에는 지연 기능 추가 전부터 실행된 이 프로젝트의 Python 서버가 남아 있었다. 소스 파일 수정은 실행 프로세스에 자동 반영되지 않는다. 동일한 delayMs=3000 요청에서 8080은 0.002540초, 최신 서버인 8081은 3.025452초였다. 앱이 전달한 지연값은 정상이었고, 오래된 서버가 쿼리를 무시했다. 이전 검증을 8081에서 수행하면서 기본 8080 프로세스를 남긴 인계 방식이 혼동의 원인이었다.
+- 조치: 명령·포트·작업 디렉터리로 구버전 개발 서버(PID 67966)를 확인한 뒤 종료하고, 최신 mock-server/server.py를 기본 8080에서 다시 실행했다. SDK·슬라이더·지연 로직은 변경하지 않았다.
+- 검증: 재시작한 8080의 같은 요청은 3.008127초에 응답했다. 실행 중인 샘플에서 3000ms로 로드를 재실행했고, 같은 화면·요청의 시작 19:07:13.093 → 성공 19:07:16.394로 약 3.301초를 확인했다. 전체 시간은 이미지 준비 등을 포함한다. 코드 변경이 없어 단위·기기 테스트 전체 재실행은 하지 않았다.
+- 후속: README에 실제 응답 시간을 측정하는 진단 명령과 서버 재시작 필요를 보완했다. 개발 서버 프로세스·앱 주소·ADB reverse를 실행 환경의 일부로 확인한다. 커밋·병합·푸시는 수행하지 않았다.
+
+## D-008 — 사용자의 로딩 중 회전 관찰과 취소 경로 검토
+
+- 날짜: 2026-11-23
+- 상태: 사용자 실험 결과 검토·설명 완료. 회전 시 로드 유지 설계는 후속 대안이며 구현하지 않았다.
+- 사용자 실험: 정상 시나리오의 로드 시작·성공을 비교 기준으로 삼고, 3~4초 응답 지연 중 회전 시 이전 화면 종료(구성 변경=true)·새 화면 생성·미로드 상태를 관찰했다. 사용자가 readAdBody의 invokeOnCancellation에 진단 로그를 추가했고, 회전 시 해당 핸들러가 실행되는 로그를 제공했다. 이 기록은 사용자 제공 관찰이며 에이전트가 같은 물리적 회전을 재실행한 결과는 아니다.
+- 코드 연결: Activity.onDestroy → BannerAdView.destroy → 세션 Job.cancel·View Scope.cancel → 취소 가능한 HTTP 대기 continuation 취소 → 등록된 Call.cancel 경로와 일치한다. 현재 Scope는 수동 생성한 Scope이므로 Activity 파괴 자체가 자동으로 취소하는 것이 아니라 명시적 해제가 연결을 만든다.
+- 관찰 해석·한계: UI 초기화만으로 요청 취소를 확정할 수 없지만, 추가 핸들러 로그는 HTTP Call.cancel 호출 경로에 도달했다는 근거다. 서버 응답 지연은 광고 데이터 단계이므로 이번 실험은 메타데이터 대기 중 취소 검증이다. 서버 처리 중단, 메모리의 즉시 회수·누수 없음, 이미지 요청·디코딩 중 취소와 모든 경합 시점까지 확인한 것은 아니다. '저장 상태 복원=true'도 광고 준비 결과 복원을 의미하지 않는다.
+- 취소 시점 검토: invokeOnCancellation은 주기적 상태 조회가 아니라 취소 이벤트 핸들러 등록이다. 외부 HTTP 작업을 시작하기 전에 등록하는 위치가 적절하다. onResponse의 response.use와 isActive, continuation의 취소 가능한 재개, 세션의 ensureActive·해제·세대 확인이 서로 다른 경계에서 결과 정리·전달을 제어한다. HTTP 대기가 이미 끝나 이미지 준비 단계에 있다면 이 핸들러 로그가 안 나와도 로드 작업은 취소될 수 있다.
+- 수명 대안: 회전 중 준비를 유지하려면 UI와 분리된 로더·상태·준비 결과를 더 긴 수명의 소유자에 둔다. 호스트 ViewModel은 후보이며 SDK가 ViewModel을 필수 의존하도록 만들 필요는 없다. 이전 View·Activity·그것을 캡처한 콜백을 보관하지 않고 새 화면이 상태를 구독해 새 View에 연결해야 한다. 기존 구조에서 destroy를 생략하거나 Scope만 옮기는 변경으로는 이 분리가 완성되지 않는다.
+- onDestroy 한계: 프로세스 종료 때는 정상 취소·해제 콜백이 보장되지 않으며 같은 프로세스의 코루틴·스레드도 더 실행되지 않는다. 서버의 이미 수신한 처리가 취소됨을 뜻하지 않는다. 반면 프로세스가 살아 있고 화면만 안 보이는 상태에서는 현재 구현이 자동 취소하지 않으며, 해제 호출 누락에 대한 일반 보장도 없다. 화면 비가시 시 중지 정책은 별도 계약이다.
+- 실제 추가 확인: 현재 진단 로그를 포함한 BannerHttpSourceTest 9개를 실행해 통과했다. 전체 단위·기기 테스트 재실행, 새 물리적 회전·프로세스 종료·메모리 측정은 수행하지 않았다. 사용자 소스의 진단 로그는 유지했고 제품 코드·정책·커밋·병합은 변경하지 않았다.
+- 참고: [취소 가능한 콜백 대기](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/suspend-cancellable-coroutine.html), [invokeOnCancellation](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-cancellable-continuation/invoke-on-cancellation.html), [Activity·프로세스 수명](https://developer.android.com/guide/components/activities/process-lifecycle), [ViewModel](https://developer.android.com/topic/libraries/architecture/viewmodel).
+
+## D-009 — 기능 커밋 분리와 원격 PR 작업 방식
+
+- 날짜: 2026-11-24
+- 사용자 요청: 원격 저장소는 사용자가 생성 후 링크를 제공한다. 초기 세팅의 main만 먼저 업로드하고, 기능 브랜치는 PR로 병합한다. 이번 범위는 기능 브랜치의 로컬 커밋 분리다.
+- 분할 기준: 검토할 동작과 이를 검증하는 테스트·계약 문서를 함께 묶는다. SDK·단위 테스트·공개 계약, 모의 서버·샘플·기기 통합 테스트·실행 가이드, 학습·판단 기록·작업 지침의 세 단위로 나눈다. 의존 순서는 SDK → 샘플 연동이며 각 커밋의 문서는 그 시점의 구현 상태에 맞춘다.
+- 발견·조치: 커밋 전 기기 테스트에서 화면 재생성 후 이전 리스너 결과 차단 검증이 실패했다. 현재 MainActivity.onDestroy의 banner.destroy()가 주석 처리된 상태였으며, 기존 해제 계약에 맞게 호출을 복원했다. 사용자 설명 주석과 HTTP 취소 진단 로그는 유지한다. SDK 정책을 변경하거나 회전 중 로드를 유지하는 설계를 도입한 것은 아니다.
+- 환경: Android CLI의 에뮬레이터 시작 완료 후 기기 연결이 사라져 첫 기기 검사 시도가 실행되지 않았다. 에뮬레이터를 직접 실행해 연결·부팅 완료를 확인한 뒤 테스트를 실행했다. 연결 실패와 실제 테스트 실패를 구분한다.
+- 최종 재검증: SDK 단위 테스트 16개, 해제 호출 복원 후 API 34 ARM64 기기 통합 테스트 5개 통과. Debug AAR·APK 빌드 성공, 두 모듈 Lint 오류 0개이며 SDK 버전 안내 경고 12개는 남는다. Python 서버 구문 검사와 커밋별 문서의 로컬 링크·스테이징 범위를 확인한다. 새 물리적 회전·메모리 측정·외부 광고망 검증은 수행하지 않았다.
+- Git 범위: main은 초기 세팅 606cb25에 유지한다. 실제 기능 커밋 결과는 Git 이력을 따르며, 원격 등록·푸시·PR 생성·병합은 수행하지 않는다. 원격 링크를 받은 뒤 초기 main 업로드와 기능 PR을 이어간다.
 
 ## 새 문제·실험 기록 형식
 
