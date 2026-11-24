@@ -1,6 +1,7 @@
 ### Android ###
 .DS_Store
 .kotlin/
+__pycache__/
 # Gradle files
 .gradle/
 build/
