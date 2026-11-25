@@ -2,6 +2,7 @@ package io.github.junyoungwon.adsdk.internal
 
 import io.github.junyoungwon.adsdk.BannerAdError
 import io.github.junyoungwon.adsdk.BannerAdListener
+import io.github.junyoungwon.adsdk.BannerAdShowError
 import io.github.junyoungwon.adsdk.BannerAdRequest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -18,7 +19,7 @@ class BannerLoadSessionTest {
 
     @Test
     // 준비 완료·콜백·show의 순서를 검증한다. 실제 Android 렌더링 대신 문자열과 전달 함수를 사용한다.
-    fun 준비가_끝나도_show_전에는_준비_결과를_전달하지_않는다() = runTest {
+    fun 로드가_완료되어도_show_전에는_광고를_전달하지_않는다() = runTest {
         val image = CompletableDeferred<String>()
         val session = BannerLoadSession(this) { image.await() }
         val listener = RecordingListener()
@@ -26,16 +27,16 @@ class BannerLoadSessionTest {
 
         session.load(request, listener)
         runCurrent()
-        assertFalse(session.show { rendered = it })
+        assertFalse(session.bind { rendered = it })
         assertEquals(0, listener.loads)
         image.complete("decoded-image")
         runCurrent()
 
         assertEquals(1, listener.loads)
         assertNull(rendered)
-        assertTrue(session.show { rendered = it })
+        assertTrue(session.bind { rendered = it })
         assertEquals("decoded-image", rendered)
-        assertTrue(session.show { rendered = it })
+        assertTrue(session.bind { rendered = it })
         assertEquals(1, listener.loads)
     }
 
@@ -50,7 +51,7 @@ class BannerLoadSessionTest {
 
         assertEquals(0, listener.loads)
         assertEquals(listOf(error), listener.failures)
-        assertFalse(session.show { fail("실패한 로드는 준비 결과를 전달하면 안 됩니다") })
+        assertFalse(session.bind { fail("실패한 로드는 로드 완료된 광고를 전달하면 안 됩니다") })
     }
 
     @Test
@@ -73,7 +74,7 @@ class BannerLoadSessionTest {
         assertEquals(0, oldListener.loads)
         assertTrue(oldListener.failures.isEmpty())
         assertEquals(1, newListener.loads)
-        assertTrue(session.show { assertEquals("new-image", it) })
+        assertTrue(session.bind { assertEquals("new-image", it) })
     }
 
     @Test
@@ -97,7 +98,7 @@ class BannerLoadSessionTest {
         assertEquals(1, preparations)
         assertEquals(0, listener.loads)
         assertTrue(listener.failures.isEmpty())
-        assertFalse(session.show { fail("해제한 세션은 준비 결과를 전달하면 안 됩니다") })
+        assertFalse(session.bind { fail("해제한 세션은 로드 완료된 광고를 전달하면 안 됩니다") })
     }
 
     @Test
@@ -121,8 +122,8 @@ class BannerLoadSessionTest {
     }
 
     @Test
-    // 현재 정책: 새 load 직후 이전 준비 결과를 버리며, NoFill이어도 이전 결과로 복귀하지 않는다.
-    fun 재로드가_실패해도_이전_준비_결과를_재사용하지_않는다() = runTest {
+    // 새 load는 이전에 로드 완료된 광고를 버린다. View가 표시 중인 이미지의 유지와는 별개다.
+    fun 재로드가_실패해도_이전에_로드_완료된_광고를_재사용하지_않는다() = runTest {
         val session = BannerLoadSession(this) { req ->
             if (req.placementId == "bad") {
                 throw BannerLoadException(BannerAdError(BannerAdError.Code.NO_FILL, "empty"))
@@ -132,11 +133,11 @@ class BannerLoadSessionTest {
         val listener = RecordingListener()
         session.load(request, listener)
         runCurrent()
-        assertTrue(session.show {})
+        assertTrue(session.bind {})
         session.load(request.copy(placementId = "bad"), listener)
-        assertFalse(session.show {})
+        assertFalse(session.bind {})
         runCurrent()
-        assertFalse(session.show {})
+        assertFalse(session.bind {})
         assertEquals(1, listener.loads)
         assertEquals(BannerAdError.Code.NO_FILL, listener.failures.single().code)
     }
@@ -147,13 +148,61 @@ class BannerLoadSessionTest {
         val session = BannerLoadSession(this) { "image" }
         session.load(request, object : BannerAdListener {
             override fun onLoaded() {
-                assertTrue(session.show { assertEquals("image", it) })
+                assertTrue(session.bind { assertEquals("image", it) })
                 session.destroy()
             }
             override fun onFailed(error: BannerAdError) = fail(error.toString())
         })
         runCurrent()
-        assertFalse(session.show {})
+        assertFalse(session.bind {})
+    }
+
+    @Test
+    fun 표시_실패는_미로드와_로드중과_로드실패와_해제를_구분한다() = runTest {
+        val release = CompletableDeferred<Unit>()
+        val loadError = BannerAdError(BannerAdError.Code.NO_FILL, "empty")
+        val session = BannerLoadSession<String>(this) {
+            release.await()
+            throw BannerLoadException(loadError)
+        }
+        val failures = mutableListOf<BannerAdShowError>()
+        fun show() = session.bindPrepared({ fail("준비되지 않은 결과를 반영하면 안 됩니다") }, failures::add)
+
+        show()
+        session.load(request, RecordingListener())
+        show()
+        runCurrent()
+        release.complete(Unit)
+        runCurrent()
+        show()
+        session.destroy()
+        show()
+
+        assertEquals(listOf(
+            BannerAdShowError.Code.NOT_LOADED,
+            BannerAdShowError.Code.LOADING,
+            BannerAdShowError.Code.LOAD_FAILED,
+            BannerAdShowError.Code.DESTROYED
+        ), failures.map { it.code })
+        assertSame(loadError, failures[2].loadError)
+        assertNull(failures.last().loadError)
+    }
+
+    @Test
+    fun 실패한_광고_표시의_콜백에서_다시_로드하면_가장_최근에_로드_완료된_광고를_반영한다() = runTest {
+        val session = BannerLoadSession(this) { "new-image" }
+        session.bindPrepared({ fail("미로드 상태입니다") }) { error ->
+            assertEquals(BannerAdShowError.Code.NOT_LOADED, error.code)
+            session.load(request, RecordingListener())
+        }
+        runCurrent()
+        assertTrue(session.bind { assertEquals("new-image", it) })
+    }
+
+    private fun <T : Any> BannerLoadSession<T>.bind(render: (T) -> Unit): Boolean {
+        var bound = false
+        bindPrepared({ result -> bound = true; render(result) }, {})
+        return bound
     }
 
     private class RecordingListener : BannerAdListener {

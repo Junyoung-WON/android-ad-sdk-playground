@@ -18,6 +18,9 @@ import io.github.junyoungwon.adsdk.BannerAdError
 import io.github.junyoungwon.adsdk.BannerAdListener
 import io.github.junyoungwon.adsdk.BannerAdRequest
 import io.github.junyoungwon.adsdk.BannerAdView
+import io.github.junyoungwon.adsdk.BannerAdInfo
+import io.github.junyoungwon.adsdk.BannerAdShowError
+import io.github.junyoungwon.adsdk.BannerAdShowListener
 import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
@@ -111,7 +114,17 @@ class MainActivity : AppCompatActivity() {
             })
         }
         show.setOnClickListener {
-            status.setText(if (banner.show()) R.string.banner_bound else R.string.banner_unavailable)
+            banner.show(object : BannerAdShowListener {
+                override fun onShowSuccess(adInfo: BannerAdInfo) {
+                    record("광고 표시 성공 · 지면=${adInfo.placementId} 광고=${adInfo.adId}")
+                    status.text = getString(R.string.banner_bound, adInfo.adId)
+                }
+
+                override fun onShowFailed(error: BannerAdShowError) {
+                    record("광고 표시 실패 · 코드=${error.code}")
+                    status.text = getString(R.string.banner_show_failed, error.code.name, error.message)
+                }
+            })
         }
         destroy.setOnClickListener {
             banner.destroy()
