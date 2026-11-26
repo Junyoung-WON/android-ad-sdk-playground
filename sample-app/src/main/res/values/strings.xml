@@ -28,4 +28,8 @@
     <string name="banner_show_failed">새 광고를 반영하지 못했습니다. %1$s\n%2$s</string>
     <string name="banner_destroyed">배너를 해제했습니다. 다시 사용하려면 새 배너를 만들어주세요.</string>
     <string name="banner_failed">새 광고 로드 실패: %1$s\n%2$s\n기존에 표시한 광고는 유지합니다.</string>
+    <string name="hide_banner">배너 숨기기</string>
+    <string name="reveal_banner">배너 다시 보기</string>
+    <string name="impression_initial">이 View의 노출 알림: 0회\n창에 포커스가 있고 광고 이미지의 50% 이상이 연속 1초 보여야 알립니다.</string>
+    <string name="impression_detected">이 View의 노출 알림: %1$d회\n조건을 충족한 광고 ID: %2$s\n서버 집계와 과금은 구현하지 않았습니다.</string>
 </resources>
