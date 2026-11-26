@@ -48,8 +48,9 @@ public class BannerAdView @JvmOverloads constructor(
     // 광고 이미지를 로드하는 이미지 로더
     private val images = BannerImageLoader(context, imageLoader)
     // 광고를 로드할 세션, 코루틴 스코프와 광고를 준비하는 람다 함수(prepare)를 파라미터로 받는다.
-    private val session = BannerLoadSession<Drawable>(scope) { request ->
-        images.prepare(source.fetch(request))
+    private val session = BannerLoadSession<PreparedBanner>(scope) { request ->
+        val creative = source.fetch(request)
+        PreparedBanner(BannerAdInfo(creative.adId, request.placementId), images.prepare(creative))
     }
     private val image = ImageView(context).apply {
         scaleType = ImageView.ScaleType.FIT_CENTER
@@ -71,30 +72,36 @@ public class BannerAdView @JvmOverloads constructor(
         addView(badge, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END))
     }
 
-    /** Clears any previous banner and replaces an in-flight load. No rendering until [show].
-     * 배너에 실려있는 광고를 제거하고 로드, show를 하기 전까지 렌더링하지 않음 */
+    /**
+     * 진행 중인 로드와 로드는 완료됐지만 아직 View에 반영하지 않은 광고를 교체한다.
+     * 기존 광고 표시는 유지하고, 가장 최근에 로드 완료된 광고는 [show]에서 반영한다.
+     */
     @MainThread
     public fun load(request: BannerAdRequest, listener: BannerAdListener) {
         requireMainThread()
         if (destroyed) return
-        clearImage()
         session.load(request, listener)
     }
 
     /**
-     * Binds the prepared image, returning false if unavailable/destroyed. Repeated calls are safe.
-     * True means the image was bound, not that the view is visible or an impression occurred.
+     * 가장 최근에 로드 완료된 광고를 반영하고, 호출 안에서 결과 콜백 하나를 메인 스레드로 전달한다.
+     * 실패해도 기존 광고 표시는 유지한다. 반복 호출은 같은 광고를 반영하고 매번 성공을 알린다.
+     * 성공은 View에 이미지가 설정됐다는 의미이며 실제 가시성이나 노출을 보장하지 않는다.
      */
     @MainThread
-    public fun show(): Boolean {
+    public fun show(listener: BannerAdShowListener) {
         requireMainThread()
-        return session.show { drawable ->
-            image.setImageDrawable(drawable)
-            badge.visibility = View.VISIBLE
-        }
+        session.bindPrepared(
+            render = { prepared ->
+                image.setImageDrawable(prepared.drawable)
+                badge.visibility = View.VISIBLE
+                listener.onShowSuccess(prepared.info)
+            },
+            onUnavailable = listener::onShowFailed
+        )
     }
 
-    /** Terminal and idempotent. Later load() calls do nothing; show() returns false. */
+    /** 최종 해제이며 반복 호출은 안전하다. 이후 load는 무시하고 show는 DESTROYED를 알린다. */
     @MainThread
     public fun destroy() {
         requireMainThread()
@@ -116,4 +123,6 @@ public class BannerAdView @JvmOverloads constructor(
     private fun requireMainThread() {
         check(Looper.myLooper() == Looper.getMainLooper()) { "BannerAdView requires the main thread" }
     }
+
+    private data class PreparedBanner(val info: BannerAdInfo, val drawable: Drawable)
 }

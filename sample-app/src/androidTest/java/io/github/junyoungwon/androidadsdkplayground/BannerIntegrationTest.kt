@@ -2,6 +2,8 @@ package io.github.junyoungwon.androidadsdkplayground
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.os.Looper
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -13,6 +15,9 @@ import io.github.junyoungwon.adsdk.BannerAdError
 import io.github.junyoungwon.adsdk.BannerAdListener
 import io.github.junyoungwon.adsdk.BannerAdRequest
 import io.github.junyoungwon.adsdk.BannerAdView
+import io.github.junyoungwon.adsdk.BannerAdInfo
+import io.github.junyoungwon.adsdk.BannerAdShowError
+import io.github.junyoungwon.adsdk.BannerAdShowListener
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -55,7 +60,7 @@ class BannerIntegrationTest {
         val listener = ResultListener()
         scenario.onActivity { activity ->
             val banner = activity.banner()
-            assertFalse(banner.show())
+            banner.assertShowFailure()
             banner.load(request(), listener)
         }
         listener.await()
@@ -66,9 +71,9 @@ class BannerIntegrationTest {
             val banner = activity.banner()
             val image = banner.getChildAt(0) as ImageView
             assertNull(image.drawable)
-            assertTrue(banner.show())
+            banner.assertShowSuccess()
             assertNotNull(image.drawable)
-            assertTrue(banner.show())
+            banner.assertShowSuccess()
         }
         assertEquals(1, listener.loads.get())
         assertEquals("demo-banner", server.takeRequest(2, TimeUnit.SECONDS)!!.requestUrl!!.queryParameter("placementId"))
@@ -82,7 +87,7 @@ class BannerIntegrationTest {
         scenario.onActivity { it.banner().load(request(), listener) }
         listener.await()
         assertEquals(listener.error.get().toString(), 1, listener.loads.get())
-        scenario.onActivity { assertTrue(it.banner().show()) }
+        scenario.onActivity { it.banner().assertShowSuccess() }
     }
 
     @Test
@@ -96,7 +101,7 @@ class BannerIntegrationTest {
         assertEquals(0, listener.loads.get())
         assertEquals(BannerAdError.Code.IMAGE_LOAD, listener.error.get()!!.code)
         scenario.onActivity {
-            assertFalse(it.banner().show())
+            it.banner().assertShowFailure()
             assertNull((it.banner().getChildAt(0) as ImageView).drawable)
         }
     }
@@ -143,14 +148,14 @@ class BannerIntegrationTest {
                 assertNotSame(oldBanner.get(), it.banner())
                 assertEquals(3, it.findViewById<SeekBar>(R.id.response_delay).progress)
                 assertEquals(it.getString(R.string.sample_status), it.findViewById<TextView>(R.id.sample_status).text.toString())
-                assertFalse(it.banner().show())
+                it.banner().assertShowFailure()
                 // 이전 View의 load는 무시되고, 새 View만 정상적으로 요청할 수 있어야 한다.
                 oldBanner.get().load(request(), oldListener)
                 it.banner().load(request(), newListener)
             }
             newListener.await()
             assertEquals(newListener.error.get().toString(), 1, newListener.loads.get())
-            scenario.onActivity { assertTrue(it.banner().show()) }
+            scenario.onActivity { it.banner().assertShowSuccess() }
             assertFalse("종료된 화면의 리스너에 결과가 전달됐습니다", oldListener.receivedWithin(500))
             assertEquals(2, metadataCalls.get())
         } finally {
@@ -159,28 +164,187 @@ class BannerIntegrationTest {
     }
 
     @Test
-    fun 재로드하면_표시된_이미지를_지우고_NO_FILL에서_재사용하지_않는다() {
+    fun 재로드_중에는_기존_이미지를_유지하고_준비된_새_이미지는_show에서_교체한다() {
+        enqueueBanner(adId = "first-ad")
+        val first = ResultListener()
+        scenario.onActivity { it.banner().load(request(), first) }
+        first.await()
+        val displayed = AtomicReference<Drawable>()
+        scenario.onActivity {
+            assertEquals("first-ad", it.banner().assertShowSuccess().adId)
+            displayed.set((it.banner().getChildAt(0) as ImageView).drawable)
+        }
+
+        enqueueBanner(color = Color.RED, adId = "second-ad")
+        val second = ResultListener()
+        scenario.onActivity {
+            it.banner().load(request(), second)
+            // 메인 스레드를 반환하기 전이므로 새 로드 결과는 아직 전달될 수 없다.
+            it.banner().assertShowFailure(BannerAdShowError.Code.LOADING)
+            assertSame(displayed.get(), (it.banner().getChildAt(0) as ImageView).drawable)
+        }
+        second.await()
+        assertEquals(second.error.get().toString(), 1, second.loads.get())
+        scenario.onActivity {
+            val image = it.banner().getChildAt(0) as ImageView
+            assertSame(displayed.get(), image.drawable)
+            val info = it.banner().assertShowSuccess()
+            assertEquals(BannerAdInfo("second-ad", "demo-banner"), info)
+            assertEquals(info, it.banner().assertShowSuccess())
+            assertNotSame(displayed.get(), image.drawable)
+            assertEquals(Color.RED, (image.drawable as BitmapDrawable).bitmap.getPixel(0, 0))
+        }
+    }
+
+    @Test
+    fun 재로드가_NO_FILL이면_표시는_실패해도_기존_이미지를_유지하고_해제하면_지운다() {
         enqueueBanner()
         val first = ResultListener()
         scenario.onActivity { it.banner().load(request(), first) }
         first.await()
-        scenario.onActivity { assertTrue(it.banner().show()) }
+        val displayed = AtomicReference<Drawable>()
+        scenario.onActivity {
+            it.banner().assertShowSuccess()
+            displayed.set((it.banner().getChildAt(0) as ImageView).drawable)
+        }
 
         server.enqueue(MockResponse().setResponseCode(204))
         val second = ResultListener()
         scenario.onActivity {
             it.banner().load(request(), second)
-            assertNull((it.banner().getChildAt(0) as ImageView).drawable)
-            assertFalse(it.banner().show())
+            assertSame(displayed.get(), (it.banner().getChildAt(0) as ImageView).drawable)
+            it.banner().assertShowFailure(BannerAdShowError.Code.LOADING)
         }
         second.await()
         assertEquals(0, second.loads.get())
         assertEquals(BannerAdError.Code.NO_FILL, second.error.get()!!.code)
         scenario.onActivity {
-            assertFalse(it.banner().show())
+            val failure = it.banner().assertShowFailure(BannerAdShowError.Code.LOAD_FAILED)
+            assertEquals(BannerAdError.Code.NO_FILL, failure.loadError!!.code)
+            assertSame(displayed.get(), (it.banner().getChildAt(0) as ImageView).drawable)
             it.banner().destroy()
             it.banner().destroy()
-            assertFalse(it.banner().show())
+            it.banner().assertShowFailure(BannerAdShowError.Code.DESTROYED)
+            assertNull((it.banner().getChildAt(0) as ImageView).drawable)
+        }
+    }
+
+    @Test
+    fun 새_이미지_디코딩이_실패해도_이미_표시한_광고는_유지한다() {
+        enqueueBanner()
+        val first = ResultListener()
+        scenario.onActivity { it.banner().load(request(), first) }
+        first.await()
+        val displayed = AtomicReference<Drawable>()
+        scenario.onActivity {
+            it.banner().assertShowSuccess()
+            displayed.set((it.banner().getChildAt(0) as ImageView).drawable)
+        }
+        server.enqueue(MockResponse().setBody(metadata("bad-image")))
+        server.enqueue(MockResponse().setHeader("Content-Type", "image/png").setBody("invalid image"))
+        val second = ResultListener()
+        scenario.onActivity { it.banner().load(request(), second) }
+        second.await()
+        scenario.onActivity {
+            val failure = it.banner().assertShowFailure(BannerAdShowError.Code.LOAD_FAILED)
+            assertEquals(BannerAdError.Code.IMAGE_LOAD, failure.loadError!!.code)
+            assertSame(displayed.get(), (it.banner().getChildAt(0) as ImageView).drawable)
+        }
+    }
+
+    @Test
+    fun 로드_완료됐지만_광고_표시하지_않은_광고는_다음_로드가_시작되면_버린다() {
+        enqueueBanner(adId = "unshown")
+        val first = ResultListener()
+        scenario.onActivity { it.banner().load(request(), first) }
+        first.await()
+        server.enqueue(MockResponse().setResponseCode(204))
+        val second = ResultListener()
+        scenario.onActivity { it.banner().load(request(), second) }
+        second.await()
+        scenario.onActivity {
+            it.banner().assertShowFailure(BannerAdShowError.Code.LOAD_FAILED)
+            assertNull((it.banner().getChildAt(0) as ImageView).drawable)
+        }
+    }
+
+    @Test
+    fun 광고_표시중인_광고와_새로_로드_완료된_광고가_함께_있어도_해제하면_둘다_사용할_수_없다() {
+        enqueueBanner(adId = "displayed")
+        val first = ResultListener()
+        scenario.onActivity { it.banner().load(request(), first) }
+        first.await()
+        val displayed = AtomicReference<Drawable>()
+        scenario.onActivity {
+            it.banner().assertShowSuccess()
+            displayed.set((it.banner().getChildAt(0) as ImageView).drawable)
+        }
+        enqueueBanner(color = Color.RED, adId = "prepared")
+        val second = ResultListener()
+        scenario.onActivity { it.banner().load(request(), second) }
+        second.await()
+        scenario.onActivity {
+            val banner = it.banner()
+            assertSame(displayed.get(), (banner.getChildAt(0) as ImageView).drawable)
+            banner.destroy()
+            assertNull((banner.getChildAt(0) as ImageView).drawable)
+            banner.assertShowFailure(BannerAdShowError.Code.DESTROYED)
+        }
+    }
+
+    @Test
+    fun 광고_표시_성공_콜백에서_해제해도_결과는_한번만_전달한다() {
+        enqueueBanner(adId = "callback-ad")
+        val loaded = ResultListener()
+        scenario.onActivity { it.banner().load(request(), loaded) }
+        loaded.await()
+        var successes = 0
+        scenario.onActivity {
+            val banner = it.banner()
+            banner.show(object : BannerAdShowListener {
+                override fun onShowSuccess(adInfo: BannerAdInfo) {
+                    successes++
+                    assertEquals("callback-ad", adInfo.adId)
+                    assertNotNull((banner.getChildAt(0) as ImageView).drawable)
+                    banner.destroy()
+                }
+                override fun onShowFailed(error: BannerAdShowError) = fail(error.toString())
+            })
+            banner.assertShowFailure(BannerAdShowError.Code.DESTROYED)
+            assertNull((banner.getChildAt(0) as ImageView).drawable)
+        }
+        assertEquals(1, successes)
+    }
+
+    private fun BannerAdView.assertShowSuccess(): BannerAdInfo {
+        val result = ShowResultListener()
+        show(result)
+        assertEquals(1, result.successes.size)
+        assertTrue(result.failures.isEmpty())
+        assertSame(Looper.getMainLooper(), result.callbackLooper)
+        return result.successes.single()
+    }
+
+    private fun BannerAdView.assertShowFailure(code: BannerAdShowError.Code? = null): BannerAdShowError {
+        val result = ShowResultListener()
+        show(result)
+        assertEquals(1, result.failures.size)
+        assertTrue(result.successes.isEmpty())
+        assertSame(Looper.getMainLooper(), result.callbackLooper)
+        return result.failures.single().also { if (code != null) assertEquals(code, it.code) }
+    }
+
+    private class ShowResultListener : BannerAdShowListener {
+        val successes = mutableListOf<BannerAdInfo>()
+        val failures = mutableListOf<BannerAdShowError>()
+        var callbackLooper: Looper? = null
+        override fun onShowSuccess(adInfo: BannerAdInfo) {
+            callbackLooper = Looper.myLooper()
+            successes += adInfo
+        }
+        override fun onShowFailed(error: BannerAdShowError) {
+            callbackLooper = Looper.myLooper()
+            failures += error
         }
     }
 
@@ -192,11 +356,11 @@ class BannerIntegrationTest {
     private fun localUrl(path: String) = HttpUrl.Builder()
         .scheme("http").host("127.0.0.1").port(server.port).encodedPath(path).build()
     private fun request() = BannerAdRequest("demo-banner", localUrl("/ads").toString())
-    private fun metadata() = """{"adId":"integration-test","imageUrl":"${localUrl("/banner.png")}"}"""
+    private fun metadata(adId: String = "integration-test") = """{"adId":"$adId","imageUrl":"${localUrl("/banner.png")}"}"""
 
-    private fun enqueueBanner(closeMetadataConnection: Boolean = false) {
-        val bytes = pngBytes()
-        val metadataResponse = MockResponse().setBody(metadata())
+    private fun enqueueBanner(closeMetadataConnection: Boolean = false, color: Int = Color.BLUE, adId: String = "integration-test") {
+        val bytes = pngBytes(color)
+        val metadataResponse = MockResponse().setBody(metadata(adId))
         if (closeMetadataConnection) {
             metadataResponse.setStatus("HTTP/1.0 200 OK")
                 .setSocketPolicy(SocketPolicy.DISCONNECT_AT_END)
@@ -205,9 +369,9 @@ class BannerIntegrationTest {
         server.enqueue(MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(bytes)))
     }
 
-    private fun pngBytes(): ByteArray {
+    private fun pngBytes(color: Int = Color.BLUE): ByteArray {
         val bitmap = Bitmap.createBitmap(64, 20, Bitmap.Config.ARGB_8888)
-        bitmap.eraseColor(Color.BLUE)
+        bitmap.eraseColor(color)
         val bytes = ByteArrayOutputStream().use { stream ->
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
             stream.toByteArray()
