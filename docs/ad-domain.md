@@ -1,6 +1,6 @@
 # 광고 도메인 학습과 참고 자료
 
-최종 내용 갱신일: 2026-11-25
+최종 내용 갱신일: 2026-11-26
 
 운영 지침은 [AGENTS.md](../AGENTS.md)를 따른다. 관련 상태는 [프로젝트 맥락](project-context.md), 판단 근거는 [의사결정·실험 기록](decisions.md)을 참고한다.
 
@@ -68,6 +68,20 @@
 
 - 광고 데이터 응답은 받았지만 이미지 다운로드가 실패한 경우: 응답 수신은 성공했으나, 이미지 준비까지 요구하는 우리 프로젝트의 로드는 실패한 것이다.
 - 프리로드를 완료했지만 해당 화면에 진입하지 않은 경우: 로드 완료는 알리되 광고 표시·노출이 발생했다고 기록하지 않는다.
+
+노출 판정 구현 준비에서 확인한 사항(2026-11-26): [Google Active View](https://support.google.com/admanager/answer/3154105?hl=en)는 디스플레이 조회 가능성에 면적 50%와 1초를 설명하면서 일반 노출과 조회 가능성 측정을 구분한다. 이 값을 프로젝트 정책으로 선택해도 공인 측정 구현이 되는 것은 아니다. [Android View 문서](https://developer.android.com/reference/android/view/View)는 getGlobalVisibleRect를 root View에서 잘리지 않은 영역의 사각형으로 설명한다. 이 기하 정보만으로 다른 View나 창의 임의 가림을 모두 알 수 있다고 해석하지 않는다. [Activity 생명주기 문서](https://developer.android.com/guide/components/activities/activity-lifecycle)에서는 Paused Activity도 다중 창에서 보일 수 있음을 설명하므로, 창 포커스와 가시성을 같은 의미로 쓰지 않는다.
+
+### 노출 관련 이벤트와 시간 지표
+
+이벤트는 특정 시점의 발생 사실이고, 가시 면적과 경과 시간은 측정값이며, 노출 수와 평균 시간은 집계 지표다. 예를 들어 조건을 처음 충족한 시점에 이벤트를 한 번 알리는 것과 이후 보인 시간까지 계속 측정하는 것은 별도 책임이다. SDK가 내부에서 관찰하는 모든 신호를 호스트 앱의 공개 콜백으로 제공하는 것은 아니다.
+
+[IAB Tech Lab OM SDK](https://iabtechlab.com/standards/open-measurement-sdk/)는 화면상 광고와 가시 비율, 시간을 측정하기 위한 신호와 제삼자 측정 접근을 설명한다. [Android 연동 문서](https://interactiveadvertisingbureau.github.io/Open-Measurement-SDKAndroid/)는 impression 신호와 동영상 시작, 재생 구간 도달, 일시 정지와 재개 등을 구분한다. 일반 노출과 조회 가능한 노출, 클릭, 동영상 재생 이벤트를 하나의 성공 콜백으로 해석하지 않는다. 지원 여부는 형식과 제품 계약을 따른다.
+
+노출 시간을 설계할 때는 어떤 면적과 창 상태를 만족한 시간을 셀지, 중단 전후를 합산할지, 가장 긴 연속 구간을 구할지, 광고 교체와 화면 종료 중 언제 보고할지를 정해야 한다. 광고 로드 지연과 영상 재생 시간, 사람이 실제 주의를 기울인 시간과도 구분한다. 이는 가능한 설계 항목이며 이번 프로젝트에 새로 적용한 요구사항은 아니다.
+
+[Google Active View 보고서](https://support.google.com/admanager/answer/3154105?hl=en)는 평균 조회 가능 시간을 별도 지표로 설명한다. 다만 [지원 범위 문서](https://support.google.com/admanager/answer/7079212?hl=en)는 해당 평균 시간 지표를 모바일 앱 인벤토리에는 제공하지 않는다고 명시한다. 시간 측정 자체의 가능성과 특정 SDK 콜백 또는 보고서의 제공 여부를 구분한다.
+
+현재 프로젝트의 onImpression은 show로 반영한 광고가 프로젝트 조건을 처음 충족했음을 한 View의 동일 adId에 한 번 알린다. 내부에서 연속 1초를 판정하지만 총 가시 시간, 최대 연속 시간, 노출 종료 이벤트는 제공하지 않는다. 콜백 정보에는 adId와 placementId만 있으며 시간값은 없다. 판정 이후의 시간 통계와 서버 수신, 집계는 별도 범위다. 이 기능은 단순화한 조회 가능 조건 판정에 가깝고 공인 측정 구현을 뜻하지 않는다.
 
 ### 5. 트래킹과 전환
 
