@@ -84,7 +84,7 @@ class MainActivity : AppCompatActivity() {
             banner.setImpressionListener(object : BannerAdImpressionListener {
                 override fun onImpression(adInfo: BannerAdInfo) {
                     impressionCount++
-                    record("노출 조건 충족 · 광고=${adInfo.adId} 알림=$impressionCount")
+                    record("onImpression 콜백 수신: 광고=${adInfo.adId} 횟수=$impressionCount")
                     impressionStatus.text = getString(R.string.impression_detected, impressionCount, adInfo.adId)
                 }
             })

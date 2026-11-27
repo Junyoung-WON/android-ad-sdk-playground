@@ -33,8 +33,9 @@ import okhttp3.OkHttpClient
  * 로드 완료와 광고 표시 성공은 실제 화면 가시성이나 노출 조건 충족을 보장하지 않는다.
  * 재로드 중에도 기존 광고를 유지하고, 새로 로드 완료된 광고를 show할 때 교체한다.
  *
- * [setImpressionListener]로 노출 알림을 구독한다. 창에 포커스가 있고 이미지 면적의 50% 이상이
- * 연속 1초 보이면 이 View의 동일 adId에 한 번 알린다. 면적은 사각형의 클리핑을 기준으로 하며,
+ * [setImpressionListener]로 onImpression 콜백을 받을 리스너를 등록한다. 창에 포커스가 있고 이미지 면적의 50% 이상이
+ * 연속 1초 보이면 로드 완료된 광고마다 onImpression 콜백을 한 번 호출한다. 같은 adId를 새로 로드해 반영해도 다시 판정한다.
+ * 면적은 사각형의 클리핑을 기준으로 하며,
  * 다른 View의 임의 가림이나 투명 픽셀까지 측정하는 공인 측정 구현은 아니다.
  * 총 가시 시간 집계와 서버 전송, 과금은 제공하지 않는다.
  *
@@ -50,6 +51,8 @@ public class BannerAdView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : FrameLayout(context, attrs, defStyleAttr) {
+    // 이 View 안에서 로드 완료된 광고를 구분한다. 서버 adId와 별개이며 반복 show에서는 바뀌지 않는다.
+    private var lastLoadId = 0L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val client = OkHttpClient.Builder()
         .callTimeout(5, TimeUnit.SECONDS)
@@ -68,7 +71,8 @@ public class BannerAdView @JvmOverloads constructor(
     // 최신 요청의 상태와 로드 완료된 광고를 보관한다. 현재 View의 광고와 수명이 다르다.
     private val session = BannerLoadSession<PreparedBanner>(scope) { request ->
         val creative = source.fetch(request)
-        PreparedBanner(BannerAdInfo(creative.adId, request.placementId), images.prepare(creative))
+        val drawable = images.prepare(creative)
+        PreparedBanner(BannerAdInfo(creative.adId, request.placementId), drawable, ++lastLoadId)
     }
     private val image = ImageView(context).apply {
         scaleType = ImageView.ScaleType.FIT_CENTER
@@ -107,11 +111,11 @@ public class BannerAdView @JvmOverloads constructor(
     }
 
     /**
-     * 이 View에서 발생하는 노출 알림을 받을 리스너를 등록하거나 교체한다.
+     * 이 View의 광고가 노출 조건을 최초 충족했을 때 onImpression 콜백을 호출할 리스너를 등록하거나 교체한다.
      * 광고 교체 후에도 유지하므로 load/show 전에 한 번 등록해 사용할 수 있다.
      *
      * 리스너가 없어도 노출 판정 이력은 유지한다. 나중에 등록한 리스너에 과거 이벤트를
-     * 소급하지 않으며, 등록 교체로 같은 광고의 알림을 다시 만들지 않는다.
+     * 소급하지 않으며, 등록 교체로 같은 로드 광고의 onImpression 콜백을 다시 호출하지 않는다.
      * [destroy] 이후 등록은 무시한다.
      *
      * @param listener 메인 스레드에서 호출할 노출 리스너. null이면 SDK가 보관한 참조를 해제한다.
@@ -124,7 +128,7 @@ public class BannerAdView @JvmOverloads constructor(
     }
 
     /**
-     * 광고 데이터 요청과 이미지 다운로드, 디코딩을 시작한다. 모두 완료하면 onLoaded를 알린다.
+     * 광고 데이터 요청과 이미지 다운로드, 디코딩을 시작한다. 모두 완료하면 onLoaded 콜백을 호출한다.
      * 로드 완료된 광고의 실제 View 반영은 [show]에서 수행한다.
      *
      * 새 호출은 이전 작업을 취소하고 이전에 로드 완료된 광고를 무효화한다.
@@ -143,12 +147,12 @@ public class BannerAdView @JvmOverloads constructor(
 
     /**
      * 가장 최근에 로드 완료된 광고를 반영하고, 호출 안에서 결과 콜백 하나를 메인 스레드로 전달한다.
-     * 새 광고가 아직 로드 중이거나 로드에 실패했다면 광고 표시 실패를 알리고 기존 광고를 유지한다.
-     * 새 load 없이 반복 호출하면 같은 광고를 반영하고 매번 성공을 알린다.
+     * 새 광고가 아직 로드 중이거나 로드에 실패했다면 onShowFailed 콜백을 호출하고 기존 광고를 유지한다.
+     * 새 load 없이 반복 호출하면 같은 광고를 반영하고 매번 onShowSuccess 콜백을 호출한다.
      *
      * 성공은 이미지와 광고 라벨을 View에 설정했다는 의미다. 미부착 상태에서도 성공할 수 있으며,
      * 노출 조건 충족 여부는 별도로 관찰한다. 같은 광고의 반복 show는 노출 시간을 초기화하거나
-     * 이미 알린 노출을 중복 발생시키지 않는다.
+     * 이미 판정한 로드 광고의 onImpression 콜백을 다시 호출하지 않는다.
      *
      * @param listener 이번 호출의 광고 표시 결과를 받을 리스너. SDK는 이후 이벤트를 위해 보관하지 않는다.
      */
@@ -196,7 +200,7 @@ public class BannerAdView @JvmOverloads constructor(
     /** 현재 광고 정보와 이미지, Tracker의 판정 대상을 함께 바꾼다. 외부 콜백은 호출하지 않는다. */
     private fun bindBanner(prepared: PreparedBanner) {
         displayedAd = prepared
-        impressions.display(prepared.info)
+        impressions.display(prepared.info, prepared.loadId)
         image.setImageDrawable(prepared.drawable)
         badge.visibility = View.VISIBLE
     }
@@ -262,13 +266,13 @@ public class BannerAdView @JvmOverloads constructor(
             if (!eligible) impressions.stopObserving()
             return
         }
-        val event = impressions.observe(eligible)
+        val qualifiedAd = impressions.observe(eligible)
         impressions.remainingMillis()?.let { postDelayed(impressionCheck, it) }
         // 이후 상태를 덮어쓰지 않아 콜백 안에서 show/load/destroy할 수 있다.
-        if (event != null) impressionListener?.onImpression(event)
+        if (qualifiedAd != null) impressionListener?.onImpression(qualifiedAd)
     }
 
-    /** 화면 관찰과 예약 작업을 함께 중단한다. 광고 정보와 이미 알린 노출 이력은 보존한다. */
+    /** 화면 관찰과 예약 작업을 함께 중단한다. 광고 정보와 이미 판정한 로드의 이력은 보존한다. */
     private fun stopImpressionObservation() {
         removeImpressionObservers()
         removeCallbacks(impressionCheck)
@@ -285,5 +289,5 @@ public class BannerAdView @JvmOverloads constructor(
         observedTree = null
     }
 
-    private data class PreparedBanner(val info: BannerAdInfo, val drawable: Drawable)
+    private data class PreparedBanner(val info: BannerAdInfo, val drawable: Drawable, val loadId: Long)
 }

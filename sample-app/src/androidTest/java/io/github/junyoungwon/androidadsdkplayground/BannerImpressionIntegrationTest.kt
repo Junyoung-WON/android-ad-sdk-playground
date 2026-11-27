@@ -34,9 +34,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * 실제 BannerAdView에서 클리핑과 창 상태가 노출 알림에 반영되는지 확인한다.
+ * 실제 BannerAdView에서 클리핑과 창 상태에 따라 onImpression 콜백이 호출되는지 확인한다.
  * 테스트마다 새 View와 로컬 HTTP 서버를 사용하며, 이미지 면적과 스크롤은 viewport로 제어한다.
- * 콜백의 유무와 광고 ID를 검증하며, 최종 화면 픽셀이나 다른 View의 임의 가림을 검증하지 않는다.
+ * 리스너의 onImpression 호출에서 수신한 광고 정보를 큐에 저장해 콜백의 유무와 광고 ID를 검증하며, 최종 화면 픽셀이나 다른 View의 임의 가림을 검증하지 않는다.
  */
 @RunWith(AndroidJUnit4::class)
 class BannerImpressionIntegrationTest {
@@ -45,7 +45,7 @@ class BannerImpressionIntegrationTest {
     private lateinit var banner: BannerAdView
     private lateinit var viewport: FrameLayout
     private var dialog: Dialog? = null
-    private val events = LinkedBlockingQueue<BannerAdInfo>()
+    private val impressionCallbackResults = LinkedBlockingQueue<BannerAdInfo>()
 
     @Before
     fun setUp() {
@@ -74,42 +74,59 @@ class BannerImpressionIntegrationTest {
     }
 
     @Test
-    fun 로드만_완료하면_알리지_않고_광고_표시후_노출은_한번만_알린다() {
+    fun 로드만_완료하면_onImpression_호출이_없고_show후_조건을_충족하면_한번_호출된다() {
         load("A")
-        assertNoEvent()
+        assertNoImpressionCallback()
         var showReturned = false
         scenario.onActivity {
             banner.setImpressionListener(object : BannerAdImpressionListener {
                 override fun onImpression(adInfo: BannerAdInfo) {
                     assertTrue(showReturned)
                     assertSame(Looper.getMainLooper(), Looper.myLooper())
-                    events.add(adInfo)
+                    impressionCallbackResults.add(adInfo)
                 }
             })
             show()
             showReturned = true
         }
-        assertEquals(BannerAdInfo("A", "demo-banner"), nextEvent())
+        assertEquals(BannerAdInfo("A", "demo-banner"), awaitImpressionCallback())
         scenario.onActivity {
             repeat(10) { show() }
             viewport.removeView(banner)
             viewport.addView(banner, FrameLayout.LayoutParams(dp(320), dp(100)))
         }
-        assertNoEvent()
+        assertNoImpressionCallback()
     }
 
     @Test
-    fun 이미지_면적_49퍼센트는_제외하고_50퍼센트부터_판정한다() {
+    fun 같은_adId와_이미지라도_새로_로드해_show하면_onImpression을_다시_호출한다() {
+        load("same-ad")
+        scenario.onActivity { show() }
+        val first = awaitImpressionCallback()
+
+        // 서버가 같은 ID와 같은 PNG를 다시 반환해도 별도로 로드 완료된 광고다.
+        load("same-ad")
+        assertNoImpressionCallback() // 새 광고를 아직 show하지 않았으므로 onImpression을 추가 호출하지 않는다.
+        scenario.onActivity { show() }
+        val second = awaitImpressionCallback()
+        assertEquals(first, second) // 메타데이터는 같아도 두 번의 로드에 각각 onImpression이 호출돼야 한다.
+
+        scenario.onActivity { repeat(5) { show() } }
+        assertNoImpressionCallback() // 새 load 없이 반복 show하면 onImpression을 추가 호출하지 않는다.
+    }
+
+    @Test
+    fun 이미지_면적_49퍼센트에서는_콜백이_없고_50퍼센트가_1초_유지되면_onImpression을_호출한다() {
         scenario.onActivity { viewport.layoutParams = viewport.layoutParams.apply { height = dp(49) } }
         load("half")
         scenario.onActivity { show() }
-        assertNoEvent()
+        assertNoImpressionCallback()
         scenario.onActivity { viewport.layoutParams = viewport.layoutParams.apply { height = dp(50) } }
-        assertEquals("half", nextEvent().adId)
+        assertEquals("half", awaitImpressionCallback().adId)
     }
 
     @Test
-    fun FIT_CENTER의_빈_여백은_광고_이미지_면적에_포함하지_않는다() {
+    fun FIT_CENTER_여백을_제외한_이미지_면적이_기준을_충족하면_onImpression을_호출한다() {
         scenario.onActivity {
             banner.layoutParams = banner.layoutParams.apply { width = dp(320); height = dp(200) }
             viewport.layoutParams = viewport.layoutParams.apply { width = dp(240); height = dp(120) }
@@ -117,90 +134,90 @@ class BannerImpressionIntegrationTest {
         // 컨테이너 기준은 45%지만 실제 이미지(320x100)는 52.5%가 보인다.
         load("letterbox")
         scenario.onActivity { show() }
-        assertEquals("letterbox", nextEvent().adId)
+        assertEquals("letterbox", awaitImpressionCallback().adId)
     }
 
     @Test
-    fun 부모가_스크롤되면_이동한_이미지의_가시_면적으로_판정한다() {
+    fun 스크롤로_이미지_가시_면적을_49퍼센트에서_50퍼센트로_늘리면_onImpression을_호출한다() {
         scenario.onActivity { viewport.scrollTo(0, dp(51)) }
         load("scroll")
         scenario.onActivity { show() }
-        assertNoEvent()
+        assertNoImpressionCallback()
         scenario.onActivity { viewport.scrollTo(0, dp(50)) }
-        assertEquals("scroll", nextEvent().adId)
+        assertEquals("scroll", awaitImpressionCallback().adId)
     }
 
     @Test
-    fun 미부착_상태의_show는_성공해도_노출은_부착후부터_판정한다() {
+    fun 미부착_상태의_show는_성공해도_onImpression은_부착후_조건을_충족해야_호출된다() {
         load("attach")
         scenario.onActivity { viewport.removeView(banner); show() }
-        assertNoEvent()
+        assertNoImpressionCallback()
         scenario.onActivity { viewport.addView(banner, FrameLayout.LayoutParams(dp(320), dp(100))) }
-        assertNull(events.poll(250, TimeUnit.MILLISECONDS))
-        assertEquals("attach", nextEvent().adId)
+        assertNull(impressionCallbackResults.poll(250, TimeUnit.MILLISECONDS))
+        assertEquals("attach", awaitImpressionCallback().adId)
     }
 
     @Test
-    fun 상위_View가_완전히_투명하면_판정하지_않는다() {
+    fun 상위_View가_완전히_투명하면_onImpression을_호출하지_않는다() {
         scenario.onActivity { viewport.alpha = 0f }
         load("alpha")
         scenario.onActivity { show() }
-        assertNoEvent()
+        assertNoImpressionCallback()
         scenario.onActivity { viewport.alpha = 1f }
-        assertEquals("alpha", nextEvent().adId)
+        assertEquals("alpha", awaitImpressionCallback().adId)
     }
 
     @Test
-    fun 상위_View의_회전변환을_제거한_뒤에야_노출을_알린다() {
+    fun 상위_View의_회전변환을_제거한_뒤에야_onImpression을_호출한다() {
         scenario.onActivity { viewport.rotation = 5f }
         load("rotation")
         scenario.onActivity { show() }
         // 이미지가 일부 보여도 회전변환은 현재 지원 범위에서 제외한다.
-        assertNoEvent()
+        assertNoImpressionCallback()
 
         scenario.onActivity { viewport.rotation = 0f }
-        assertEquals("rotation", nextEvent().adId)
+        assertEquals("rotation", awaitImpressionCallback().adId)
     }
 
     @Test
-    fun 상위_View의_배율변환을_제거한_뒤에야_노출을_알린다() {
+    fun 상위_View의_배율변환을_제거한_뒤에야_onImpression을_호출한다() {
         scenario.onActivity { viewport.scaleX = 0.8f; viewport.scaleY = 0.8f }
         load("scale")
         scenario.onActivity { show() }
-        assertNoEvent()
+        assertNoImpressionCallback()
 
         scenario.onActivity { viewport.scaleX = 1f; viewport.scaleY = 1f }
-        assertEquals("scale", nextEvent().adId)
+        assertEquals("scale", awaitImpressionCallback().adId)
     }
 
     @Test
-    fun 노출_판정전에_View를_분리하면_재부착한_시점부터_1초를_다시_잰다() {
+    fun View를_분리하면_재부착후_1초를_다시_채워야_onImpression을_호출한다() {
         load("reattach")
         scenario.onActivity { show() }
         SystemClock.sleep(400)
         scenario.onActivity { viewport.removeView(banner) }
-        // 관찰자와 예약 작업을 해제하므로 분리 중에는 알림이 없어야 한다.
-        assertNoEvent()
+        // 관찰자와 예약 작업을 해제하므로 분리 중에는 onImpression 호출이 없어야 한다.
+        assertNoImpressionCallback()
 
         scenario.onActivity { viewport.addView(banner, FrameLayout.LayoutParams(dp(320), dp(100))) }
-        assertNull(events.poll(250, TimeUnit.MILLISECONDS))
-        assertEquals("reattach", nextEvent().adId)
+        assertNull(impressionCallbackResults.poll(250, TimeUnit.MILLISECONDS))
+        assertEquals("reattach", awaitImpressionCallback().adId)
     }
 
     @Test
-    fun 숨겼다가_다시_보이면_연속시간을_처음부터_측정한다() {
+    fun 숨김후_복귀한_광고는_연속_1초를_다시_채워야_onImpression을_호출한다() {
         load("hidden")
         scenario.onActivity { show() }
         SystemClock.sleep(400)
         scenario.onActivity { banner.visibility = View.INVISIBLE }
-        assertNoEvent()
+        assertNoImpressionCallback()
         scenario.onActivity { banner.visibility = View.VISIBLE }
-        assertNull(events.poll(250, TimeUnit.MILLISECONDS))
-        assertEquals("hidden", nextEvent().adId)
+        assertNull(impressionCallbackResults.poll(250, TimeUnit.MILLISECONDS))
+        assertEquals("hidden", awaitImpressionCallback().adId)
     }
 
     @Test
-    fun 다른_창이_포커스를_가져가면_판정을_멈추고_복귀후_다시_측정한다() {
+    fun 창_포커스를_잃으면_콜백이_없고_복귀후_조건을_충족하면_onImpression을_호출한다() {
         load("focus")
         scenario.onActivity { activity ->
             dialog = Dialog(activity).apply {
@@ -210,13 +227,13 @@ class BannerImpressionIntegrationTest {
         }
         awaitUi("Dialog가 창 포커스를 가져가야 합니다") { !banner.hasWindowFocus() }
         scenario.onActivity { show() }
-        assertNoEvent()
+        assertNoImpressionCallback()
         scenario.onActivity { dialog!!.dismiss() }
-        assertEquals("focus", nextEvent().adId)
+        assertEquals("focus", awaitImpressionCallback().adId)
     }
 
     @Test
-    fun A_광고_표시중_B_로드가_실패해도_A의_관찰을_유지한다() {
+    fun A_광고_표시중_B_로드가_실패해도_onImpression은_A의_정보를_전달한다() {
         load("A")
         server.enqueue(MockResponse().setResponseCode(204).setHeadersDelay(2, TimeUnit.SECONDS))
         val failed = CountDownLatch(1)
@@ -230,60 +247,60 @@ class BannerImpressionIntegrationTest {
                 }
             })
         }
-        assertEquals("A", nextEvent().adId)
+        assertEquals("A", awaitImpressionCallback().adId)
         assertTrue(failed.await(5, TimeUnit.SECONDS))
-        assertNoEvent()
+        assertNoImpressionCallback()
         load("C")
-        assertNoEvent() // 로드 완료만으로 C를 관찰하지 않는다.
+        assertNoImpressionCallback() // 로드 완료만으로 C를 관찰하지 않는다.
         scenario.onActivity { show() }
-        assertEquals("C", nextEvent().adId)
+        assertEquals("C", awaitImpressionCallback().adId)
     }
 
     @Test
-    fun 미등록_중의_노출은_리스너_등록과_교체후에도_소급하지_않는다() {
+    fun 리스너없이_조건을_충족한_광고는_나중에_등록해도_onImpression을_호출하지_않는다() {
         scenario.onActivity { banner.setImpressionListener(null) }
         load("late")
         scenario.onActivity { show() }
         SystemClock.sleep(1_400)
         scenario.onActivity { listen() }
-        assertNoEvent()
+        assertNoImpressionCallback()
         load("new")
         scenario.onActivity { show() }
-        assertEquals("new", nextEvent().adId)
+        assertEquals("new", awaitImpressionCallback().adId)
         scenario.onActivity { listen(); show() }
-        assertNoEvent()
+        assertNoImpressionCallback()
     }
 
     @Test
-    fun 해제하면_대기중인_노출과_등록된_리스너의_추가_알림을_막는다() {
+    fun destroy_후에는_onImpression_콜백을_호출하지_않는다() {
         load("destroy")
         scenario.onActivity { show(); banner.destroy(); listen() }
-        assertNoEvent()
+        assertNoImpressionCallback()
         scenario.onActivity { assertNull((banner.getChildAt(0) as ImageView).drawable) }
     }
 
     @Test
-    fun 노출_콜백에서_show와_destroy를_호출해도_중복되지_않는다() {
+    fun onImpression_안에서_show와_destroy를_호출해도_콜백을_중복_호출하지_않는다() {
         load("reentry")
         scenario.onActivity {
             banner.setImpressionListener(object : BannerAdImpressionListener {
                 override fun onImpression(adInfo: BannerAdInfo) {
-                    events.add(adInfo)
+                    impressionCallbackResults.add(adInfo)
                     show()
                     banner.destroy()
                 }
             })
             show()
         }
-        assertEquals("reentry", nextEvent().adId)
-        assertNoEvent()
+        assertEquals("reentry", awaitImpressionCallback().adId)
+        assertNoImpressionCallback()
     }
 
     private fun listen() {
         banner.setImpressionListener(object : BannerAdImpressionListener {
             override fun onImpression(adInfo: BannerAdInfo) {
                 assertSame(Looper.getMainLooper(), Looper.myLooper())
-                events.add(adInfo)
+                impressionCallbackResults.add(adInfo)
             }
         })
     }
@@ -314,10 +331,11 @@ class BannerImpressionIntegrationTest {
         })
     }
 
-    private fun nextEvent(): BannerAdInfo = events.poll(4, TimeUnit.SECONDS)
-        ?: throw AssertionError("4초 안에 노출 조건 충족 알림을 받아야 합니다")
+    /** onImpression이 호출될 때 큐에 저장한 광고 정보를 기다린다. */
+    private fun awaitImpressionCallback(): BannerAdInfo = impressionCallbackResults.poll(4, TimeUnit.SECONDS)
+        ?: throw AssertionError("4초 안에 onImpression 콜백에서 광고 정보를 수신해야 합니다")
 
-    private fun assertNoEvent() { assertNull("노출 알림이 없어야 합니다", events.poll(1_250, TimeUnit.MILLISECONDS)) }
+    private fun assertNoImpressionCallback() { assertNull("onImpression 콜백 호출이 없어야 합니다", impressionCallbackResults.poll(1_250, TimeUnit.MILLISECONDS)) }
 
     private fun awaitUi(message: String, condition: () -> Boolean) {
         val deadline = SystemClock.uptimeMillis() + 4_000

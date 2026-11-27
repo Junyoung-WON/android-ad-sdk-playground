@@ -5,9 +5,10 @@ import org.junit.Assert.*
 import org.junit.Test
 
 /**
- * View가 알려준 노출 조건과 경과 시간으로 노출 알림 여부를 판단하는 테스트다.
- * observe(eligible = true)는 View가 가시 면적과 창 상태 등의 조건을 충족했다고 알려준다는 뜻이다.
- * observe가 광고 정보를 반환하면 새 노출 알림이 있고, null이면 알림이 없다.
+ * View가 전달한 가시 조건과 경과 시간에 따라 observe의 반환값이 달라지는지 검증한다.
+ * observe(eligible = true)는 View가 가시 면적과 창 상태 등의 조건을 충족했다고 전달한다는 뜻이다.
+ * loadId는 SDK가 로드 완료된 광고마다 발급한 값이다. 같은 adId여도 loadId가 다르면 별도 광고다.
+ * observe는 로드된 광고별 최초 노출 조건을 충족 시 BannerAdInfo를 반환한다. 그 외의 null은 새 판정 결과가 없다는 뜻이다.
  * 실제로 기다리지 않고 nowMillis를 바꿔 시간을 진행한다. 실제 View나 리스너 콜백은 이 테스트에서 다루지 않는다.
  */
 class BannerImpressionTrackerTest {
@@ -16,22 +17,22 @@ class BannerImpressionTrackerTest {
 
     @Test
     fun 생성_직후_광고를_등록하지_않으면_노출_측정을_시작하지_않는다() {
-        // 생성 직후이며 display()를 호출하지 않아 등록된 광고가 없다.
+        // Tracker 생성 직후이며 display()를 호출하지 않아 등록된 광고가 없다.
         val tracker = BannerImpressionTracker { 0L }
 
         // 광고 없이 true가 전달되는 입력에도 안전하게 대응하는지 확인한다.
-        val event = tracker.observe(eligible = true)
+        val result = tracker.observe(eligible = true)
         val remainingMillis = tracker.remainingMillis()
 
-        assertNull(event)
+        assertNull(result)
         assertNull(remainingMillis)
     }
 
     @Test
-    fun 노출_조건을_999ms_유지하면_알리지_않고_1000ms_유지하면_알린다() {
+    fun 노출_조건을_1000ms_유지한_경우에만_광고_정보를_반환한다() {
         var nowMillis = 0L
         val tracker = BannerImpressionTracker { nowMillis }
-        tracker.display(adA)
+        tracker.display(adA, loadId = 1L)
 
         // A가 노출 조건을 충족하기 시작했다. 아직 1초를 채우지 않았다.
         assertNull(tracker.observe(eligible = true))
@@ -47,16 +48,16 @@ class BannerImpressionTrackerTest {
     }
 
     @Test
-    fun 이미_노출을_알린_A가_계속_보여도_A의_노출을_다시_알리지_않는다() {
+    fun 한_로드의_광고_정보를_반환한_뒤에는_계속_true를_입력해도_null을_반환한다() {
         var nowMillis = 0L
         val tracker = BannerImpressionTracker { nowMillis }
-        tracker.display(adA)
+        tracker.display(adA, loadId = 1L)
         tracker.observe(eligible = true)
 
         nowMillis = 1_000L
         assertEquals(adA, tracker.observe(eligible = true))
 
-        // 최초 알림 이후에도 조건을 계속 충족하지만 추가 알림은 없다.
+        // 최초 광고 정보 반환 이후에도 조건을 계속 충족하지만 다시 반환하지 않는다.
         nowMillis = 2_000L
         assertNull(tracker.observe(eligible = true))
         nowMillis = 5_000L
@@ -65,10 +66,10 @@ class BannerImpressionTrackerTest {
     }
 
     @Test
-    fun 노출_조건이_끊기면_다시_충족한_시점부터_1초후에_알린다() {
+    fun 노출_조건이_끊기면_다시_충족한_시점부터_1초_후에_A의_정보를_반환한다() {
         var nowMillis = 0L
         val tracker = BannerImpressionTracker { nowMillis }
-        tracker.display(adA)
+        tracker.display(adA, loadId = 1L)
         tracker.observe(eligible = true)
 
         // 700ms 만에 조건이 끊겼으므로, 이 시간은 다음 구간에 더하지 않는다.
@@ -89,15 +90,15 @@ class BannerImpressionTrackerTest {
     }
 
     @Test
-    fun A가_700ms_보인_뒤_같은_A를_다시설정하면_300ms_후_A의_노출을_알린다() {
+    fun A가_700ms_보인_뒤_같은_A를_다시_설정하면_300ms_후_A의_정보를_반환한다() {
         var nowMillis = 0L
         val tracker = BannerImpressionTracker { nowMillis }
-        tracker.display(adA)
+        tracker.display(adA, loadId = 1L)
         tracker.observe(eligible = true)
 
-        // 새 객체라도 adId가 같으면 같은 광고다. 이미 지난 700ms를 유지한다.
+        // 정보 객체를 복사해도 loadId가 1로 같으므로 같은 로드 광고다. 이미 지난 700ms를 유지한다.
         nowMillis = 700L
-        tracker.display(adA.copy())
+        tracker.display(adA.copy(), loadId = 1L)
         assertNull(tracker.observe(eligible = true))
         assertEquals(300L, tracker.remainingMillis())
 
@@ -106,18 +107,18 @@ class BannerImpressionTrackerTest {
     }
 
     @Test
-    fun A를_700ms_보여준_뒤_B로_바꾸면_B를_1초_보여준_후_B를_알린다() {
+    fun A를_700ms_보여준_뒤_B로_바꾸면_B를_1초_보여준_후_B의_정보를_반환한다() {
         var nowMillis = 0L
         val tracker = BannerImpressionTracker { nowMillis }
-        tracker.display(adA)
+        tracker.display(adA, loadId = 1L)
         tracker.observe(eligible = true)
 
         nowMillis = 700L
-        tracker.display(adB)
+        tracker.display(adB, loadId = 2L)
         assertNull(tracker.observe(eligible = true))
         assertEquals(1_000L, tracker.remainingMillis())
 
-        // A를 포함하면 1초지만 B는 300ms만 보였다. A나 B의 알림이 나오면 안 된다.
+        // A를 포함하면 1초지만 B는 300ms만 보였다. A나 B의 정보를 반환하면 안 된다.
         nowMillis = 1_000L
         assertNull(tracker.observe(eligible = true))
 
@@ -126,32 +127,71 @@ class BannerImpressionTrackerTest {
     }
 
     @Test
-    fun A와_B의_노출을_각각_알린_후_A로_돌아가면_A를_다시_알리지_않는다() {
+    fun A와_B의_정보를_반환한_후_기존_로드_A를_다시설정하면_null을_반환한다() {
         var nowMillis = 0L
         val tracker = BannerImpressionTracker { nowMillis }
 
-        tracker.display(adA)
+        tracker.display(adA, loadId = 1L)
         tracker.observe(eligible = true)
         nowMillis = 1_000L
         assertEquals(adA, tracker.observe(eligible = true))
 
-        tracker.display(adB)
+        tracker.display(adB, loadId = 2L)
         tracker.observe(eligible = true)
         nowMillis = 2_000L
         assertEquals(adB, tracker.observe(eligible = true))
 
-        // B로 교체했어도 A의 알림 이력은 남아 있다.
-        tracker.display(adA.copy())
+        // 새로 로드하지 않고 기존 loadId=1인 A를 다시 등록한다. A의 판정 이력은 남아 있다.
+        tracker.display(adA.copy(), loadId = 1L)
         assertNull(tracker.observe(eligible = true))
         nowMillis = 7_000L
         assertNull(tracker.observe(eligible = true))
     }
 
     @Test
-    fun 노출_관찰을_중지했다_재개하면_재개한_시점부터_1초후에_알린다() {
+    fun 같은_adId를_새로_로드한_광고는_각각_1초후에_광고_정보를_반환한다() {
         var nowMillis = 0L
         val tracker = BannerImpressionTracker { nowMillis }
-        tracker.display(adA)
+        tracker.display(adA, loadId = 1L)
+        assertNull(tracker.observe(eligible = true))
+        nowMillis = 1_000L
+        assertEquals(adA, tracker.observe(eligible = true))
+
+        // 같은 adId와 같은 정보라도 새 load를 완료했으므로 loadId는 2다.
+        tracker.display(adA.copy(), loadId = 2L)
+        assertNull(tracker.observe(eligible = true))
+        assertEquals(1_000L, tracker.remainingMillis())
+        nowMillis = 1_999L
+        assertNull(tracker.observe(eligible = true))
+        nowMillis = 2_000L
+        assertEquals(adA, tracker.observe(eligible = true))
+        nowMillis = 5_000L
+        assertNull(tracker.observe(eligible = true))
+    }
+
+    @Test
+    fun 같은_adId의_새_로드로_교체하면_이전_광고의_700ms를_이어받지_않는다() {
+        var nowMillis = 0L
+        val tracker = BannerImpressionTracker { nowMillis }
+        tracker.display(adA, loadId = 1L)
+        tracker.observe(eligible = true)
+
+        nowMillis = 700L
+        tracker.display(adA.copy(), loadId = 2L)
+        assertNull(tracker.observe(eligible = true))
+        assertEquals(1_000L, tracker.remainingMillis())
+        nowMillis = 1_000L
+        assertNull(tracker.observe(eligible = true))
+        assertEquals(700L, tracker.remainingMillis())
+        nowMillis = 1_700L
+        assertEquals(adA, tracker.observe(eligible = true))
+    }
+
+    @Test
+    fun 노출_관찰을_중지했다_재개하면_재개한_시점부터_1초후에_A의_정보를_반환한다() {
+        var nowMillis = 0L
+        val tracker = BannerImpressionTracker { nowMillis }
+        tracker.display(adA, loadId = 1L)
         tracker.observe(eligible = true)
 
         // View가 화면에서 분리되는 경우처럼 관찰을 명시적으로 중지한다.
@@ -171,21 +211,21 @@ class BannerImpressionTrackerTest {
     }
 
     @Test
-    fun destroy후에는_시간이_지나거나_B를_설정해도_노출을_알리지_않는다() {
+    fun destroy_후에는_시간이_지나거나_B를_설정해도_observe가_null을_반환한다() {
         var nowMillis = 0L
         val tracker = BannerImpressionTracker { nowMillis }
-        tracker.display(adA)
+        tracker.display(adA, loadId = 1L)
         tracker.observe(eligible = true)
         tracker.destroy()
         tracker.destroy() // 반복 해제도 안전하다.
 
-        // 해제 전에 관찰하던 A의 늦은 알림을 차단한다.
+        // 해제 전에 관찰하던 A의 정보를 나중에 반환하지 않는다.
         nowMillis = 5_000L
         assertNull(tracker.observe(eligible = true))
         assertNull(tracker.remainingMillis())
 
         // 해제된 tracker에 B를 설정해도 관찰을 다시 시작하지 않는다.
-        tracker.display(adB)
+        tracker.display(adB, loadId = 2L)
         assertNull(tracker.observe(eligible = true))
         nowMillis = 6_000L
         assertNull(tracker.observe(eligible = true))
