@@ -1,6 +1,6 @@
 # 광고 도메인 학습과 참고 자료
 
-최종 내용 갱신일: 2026-11-27
+최종 내용 갱신일: 2026-11-28
 
 운영 지침은 [AGENTS.md](../AGENTS.md)를 따른다. 관련 상태는 [프로젝트 맥락](project-context.md), 판단 근거는 [의사결정·실험 기록](decisions.md)을 참고한다.
 
@@ -81,7 +81,7 @@
 
 [Google Active View 보고서](https://support.google.com/admanager/answer/3154105?hl=en)는 평균 조회 가능 시간을 별도 지표로 설명한다. 다만 [지원 범위 문서](https://support.google.com/admanager/answer/7079212?hl=en)는 해당 평균 시간 지표를 모바일 앱 인벤토리에는 제공하지 않는다고 명시한다. 시간 측정 자체의 가능성과 특정 SDK 콜백 또는 보고서의 제공 여부를 구분한다.
 
-현재 프로젝트는 show로 반영한 광고가 프로젝트 조건을 처음 충족하면 등록된 리스너의 onImpression 콜백을 호출한다. 한 번 로드 완료된 광고에 한 번 호출한다. 서버 adId와 이미지가 같아도 새로 로드해 반영한 광고는 별도로 판정한다. 내부에서 연속 1초를 판정하지만 총 가시 시간, 최대 연속 시간, 노출 종료 이벤트는 제공하지 않는다. 콜백 정보에는 adId와 placementId만 있으며 시간값은 없다. 판정 이후의 시간 통계와 서버 수신, 집계는 별도 범위다. 이 기능은 단순화한 조회 가능 조건 판정에 가깝고 공인 측정 구현을 뜻하지 않는다.
+현재 프로젝트는 show로 반영한 광고가 프로젝트 조건을 처음 충족하면 등록된 리스너의 onImpression 콜백을 호출한다. 한 View의 수명 동안 adId별로 최초 한 번 호출하며, 같은 adId의 재로드로 추가 호출하지 않는다. 내부에서 연속 1초를 판정하지만 총 가시 시간, 최대 연속 시간, 노출 종료 이벤트는 제공하지 않는다. 콜백 정보에는 adId와 placementId만 있으며 시간값은 없다. 판정 이후의 시간 통계와 서버 수신, 집계는 별도 범위다. 이 기능은 단순화한 조회 가능 조건 판정에 가깝고 공인 측정 구현을 뜻하지 않는다.
 
 ### 5. 트래킹과 전환
 
@@ -134,6 +134,25 @@ adId로 관리하는 로컬 판정 이력은 서버 제공 건의 유효성을 �
 2026-11-24 확인한 [Google Mobile Ads Next-Gen 배너 가이드](https://developers.google.com/admob/android/next-gen/banner)는 최초 로드 결과를 받는 AdLoadCallback과 자동 갱신 결과를 받는 BannerAdRefreshCallback을 구분한다. 로드 결과와 광고 노출 이벤트도 별도로 제공한다. 이는 호스트가 최초 로드와 갱신, 노출을 각각 다룰 수 있는 제품 사례다. 이 사실만으로 갱신 실패 시 이전 이미지 보존 정책이나 우리 프로젝트의 show 반환 계약을 단정하지 않는다.
 
 AdMob의 모든 광고 형식이 같은 show API를 제공한다고 일반화하지 않는다. 2026-11-25 확인한 [배너 가이드](https://developers.google.com/admob/android/next-gen/banner)는 레이아웃에 추가한 AdView로 loadAd를 호출하고, [전면 광고 가이드](https://developers.google.com/admob/android/next-gen/interstitial)는 이용 가능한 광고 객체를 얻어 show를 호출하는 흐름을 설명한다. 우리 이미지 배너의 별도 show(listener)와 View 반영 성공 콜백은 프로젝트에서 선택한 계약이다.
+
+### 비가시 상태의 View 반영과 표시 성공 콜백 비교 — 2026-11-28
+
+사용자가 가려진 배너에서도 show 성공 콜백을 호출하는 계약의 실무 적합성에 의문을 제기해 공식 문서와 공개 어댑터 코드를 비교했다. 아래는 Android 배너의 사례이며 업계 전체의 빈도나 모든 소재·미디에이션 공급원의 내부 동작을 입증하는 조사는 아니다.
+
+| SDK와 공식 근거 | 호스트가 사용하는 흐름 | 성공·표시 이벤트의 의미 |
+| --- | --- | --- |
+| [AdMob 기존 Android 배너](https://developers.google.com/admob/android/banner) | AdView를 배치하고 loadAd 호출. onAdLoaded에서 뒤늦게 View를 추가하는 방식도 문서에 명시 | onAdLoaded는 로드 완료, onAdImpression은 노출 기록. 프로젝트의 show(listener)와 동일한 동기 표시 성공 콜백은 없음 |
+| [AdMob Next-Gen AdView](https://developers.google.com/admob/android/next-gen/reference/com/google/android/libraries/ads/mobile/sdk/banner/AdView) | loadAd 성공 시 SDK가 registerBannerAd와 크기 조정을 한 뒤 로드 콜백 호출. 미리 로드한 BannerAd를 registerBannerAd로 연결하는 경로도 있음 | registerBannerAd는 광고 내용을 AdView에 채우는 void 메서드. 화면에 실제 보였다는 별도 성공 콜백으로 문서화되지 않음 |
+| [AppLovin MAX Android 배너](https://support.applovin.com/en/max/android/ad-formats/banner-and-mrec-ads) | MaxAdView를 배치하고 loadAd 호출 | 공식 예제는 onAdDisplayed와 onAdHidden을 전체 화면 광고 전용으로 표시하고 배너에서는 사용하지 말라고 안내. 메서드 이름만으로 배너 표시 완료를 판단하지 않음 |
+| [LevelPlay Android 배너](https://docs.unity.com/en-us/grow/levelplay/sdk/android/banner-integration) | LevelPlayBannerAdView를 컨테이너에 추가하고 loadAd 호출 | onAdLoaded와 onAdDisplayed를 구분하고, 후자는 화면에 표시되고 보이는 경우로 설명. onAdDisplayFailed는 공급원별 지원이 다른 선택적 콜백 |
+
+AdMob 기존 문서의 View 추가 지연 예시는 미부착 상태의 로드 완료를 허용하는 근거다. Next-Gen의 registerBannerAd 계약은 View 연결과 화면상 가시성을 구분할 참고가 된다. 다만 이 API 설명만으로 INVISIBLE·다른 View의 덮임·Activity 백그라운드의 모든 조합에서 실제 호출 결과를 확정하지 않는다. [BannerAd 레퍼런스](https://developers.google.com/admob/android/next-gen/reference/com/google/android/libraries/ads/mobile/sdk/banner/BannerAd)는 예전 BannerAd.load와 getView를 deprecated로 표시하며 각각 AdView.loadAd 또는 BannerAdPreloader, registerBannerAd 사용을 안내한다. 버전을 섞어 예제를 만들지 않는다.
+
+실제 공개 구현의 일부로 [MAX의 GoogleMediationAdapter.AdViewListener](https://github.com/AppLovin/AppLovin-MAX-SDK-Android/blob/master/Google/src/main/java/com/applovin/mediation/adapters/GoogleMediationAdapter.java)를 확인했다. AdMob.onAdLoaded에서는 내부 어댑터 리스너의 onAdViewAdLoaded에 광고 View를 전달하고, AdMob.onAdImpression에서는 onAdViewAdDisplayed를 호출한다. 이 내부 어댑터 이벤트는 앱이 받는 MAX의 onAdDisplayed와 다른 인터페이스다. 여기서 확인할 수 있는 것은 로드 결과와 공급원 노출 신호를 분리해 전달한다는 점이다. Google의 노출 판정 알고리즘이나 MAX 전체의 가림 판정 구현까지 공개된 것으로 해석하지 않는다.
+
+가려진 View에 광고를 미리 연결하는 설계는 가능하지만, 이를 즉시 onShowSuccess로 전달하는 프로젝트의 명칭과 동기 계약을 업계 공통이라고 주장할 근거는 부족하다. LevelPlay처럼 실제 화면 표시를 뜻하는 콜백도 있으므로 사용자가 두 의미를 혼동할 가능성을 API 사용성 문제로 검토한다. 화면에 보이지 않으면 항상 표시 실패 콜백을 호출한다는 공통 규칙도 확인하지 못했다. 각 SDK의 일반 노출 콜백이 프로젝트의 면적 50%·연속 1초와 같다고 해석하지 않는다.
+
+AdMob에 별도의 배너 표시 완료 콜백이 없다는 설명을 호스트가 노출 측정을 전부 구현해야 한다는 뜻으로 확장하지 않는다. AdMob은 onAdImpression으로 SDK가 노출을 기록한 사실을 전달한다. 임의의 시점에 현재 보이는지 조회하는 것, 화면에 처음 나타났다는 별도 이벤트, SDK의 노출 기록과 조회 가능성 기준은 서로 다른 계약이다. 프로젝트에서 첫 표시 이벤트를 추가할 때도 이를 모든 광고 시스템의 일반 노출 정의로 확정하지 않는다.
 
 ## 학습에 참고한 일차 자료
 
