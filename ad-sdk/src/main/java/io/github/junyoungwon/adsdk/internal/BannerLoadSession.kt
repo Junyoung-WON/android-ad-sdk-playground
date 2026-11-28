@@ -26,10 +26,12 @@ internal class BannerLoadSession<T : Any>(
 
     fun load(request: BannerAdRequest, listener: BannerAdListener) {
         if (destroyed) return
+
         val current = ++generation
         job?.cancel()
         prepared = null
         unavailable = BannerAdShowError(Code.LOADING, "최신 광고를 준비하고 있습니다.")
+
         // Assign before starting: a synchronous callback may re-enter load() or destroy().
         val next = scope.launch(start = CoroutineStart.LAZY) {
             val result = try {

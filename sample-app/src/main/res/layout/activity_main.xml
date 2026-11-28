@@ -132,6 +132,19 @@
                 android:text="@string/reset_banner" />
         </LinearLayout>
 
+        <Button
+            android:id="@+id/toggle_banner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/hide_banner" />
+
+        <TextView
+            android:id="@+id/impression_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/impression_initial"
+            android:textAppearance="?attr/textAppearanceBody2" />
+
         <FrameLayout
             android:id="@+id/banner_container"
             android:layout_width="match_parent"

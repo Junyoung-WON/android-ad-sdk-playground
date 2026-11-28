@@ -13,6 +13,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.isVisible
 import androidx.core.net.toUri
 import io.github.junyoungwon.adsdk.BannerAdError
 import io.github.junyoungwon.adsdk.BannerAdListener
@@ -21,6 +22,7 @@ import io.github.junyoungwon.adsdk.BannerAdView
 import io.github.junyoungwon.adsdk.BannerAdInfo
 import io.github.junyoungwon.adsdk.BannerAdShowError
 import io.github.junyoungwon.adsdk.BannerAdShowListener
+import io.github.junyoungwon.adsdk.BannerAdImpressionListener
 import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
@@ -71,9 +73,21 @@ class MainActivity : AppCompatActivity() {
         val load = findViewById<Button>(R.id.load_banner)
         val show = findViewById<Button>(R.id.show_banner)
         val destroy = findViewById<Button>(R.id.destroy_banner)
+        val toggle = findViewById<Button>(R.id.toggle_banner)
+        val impressionStatus = findViewById<TextView>(R.id.impression_status)
+        var impressionCount = 0
         fun createBanner() {
             container.removeAllViews()
             banner = BannerAdView(this)
+            impressionCount = 0
+            impressionStatus.setText(R.string.impression_initial)
+            banner.setImpressionListener(object : BannerAdImpressionListener {
+                override fun onImpression(adInfo: BannerAdInfo) {
+                    impressionCount++
+                    record("onImpression 콜백 수신: 광고=${adInfo.adId} 횟수=$impressionCount")
+                    impressionStatus.text = getString(R.string.impression_detected, impressionCount, adInfo.adId)
+                }
+            })
             container.addView(banner, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
@@ -81,6 +95,8 @@ class MainActivity : AppCompatActivity() {
             load.isEnabled = true
             destroy.isEnabled = true
             show.isEnabled = false
+            toggle.isEnabled = true
+            toggle.setText(R.string.hide_banner)
             status.setText(R.string.sample_status)
         }
         createBanner()
@@ -131,7 +147,13 @@ class MainActivity : AppCompatActivity() {
             show.isEnabled = false
             load.isEnabled = false
             destroy.isEnabled = false
+            toggle.isEnabled = false
             status.setText(R.string.banner_destroyed)
+        }
+        toggle.setOnClickListener {
+            val hide = banner.isVisible
+            banner.visibility = if (hide) View.INVISIBLE else View.VISIBLE
+            toggle.setText(if (hide) R.string.reveal_banner else R.string.hide_banner)
         }
         findViewById<Button>(R.id.reset_banner).setOnClickListener {
             banner.destroy()
