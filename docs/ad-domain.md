@@ -96,15 +96,21 @@
 
 ### 소재 식별과 제공 건, SDK 로드의 구분
 
+2026-11-27 식별자 의미 재검토: AdMob Next-Gen의 [응답 정보 문서](https://developers.google.com/admob/android/next-gen/response-info)는 ResponseInfo.getResponseId()를 광고 응답의 고유 식별자로 설명한다. 이는 adId라는 이름의 모든 필드가 응답마다 달라진다는 보장은 아니다. 소재를 구분하는 고유 ID라면 같은 소재를 다시 제공할 때 유지할 수 있고, 응답을 구분하는 고유 ID라면 같은 소재를 제공해도 새 응답에는 다른 값을 사용한다. ‘고유하다’는 설명에서 무엇을 구분하는지와 유일성이 보장되는 범위를 함께 확인한다. Response ID의 문서 설명만으로 서버 집계나 과금에서 이 값을 어떤 중복 제거 키로 사용하는지까지 단정하지 않는다.
+
 같은 소재를 새로 선택해 제공하는 것과 같은 제공 건의 이벤트를 중복 처리하는 것은 다르다. [IAB Tech Lab VAST 4.3](https://iabtechlab.com/wp-content/uploads/2022/09/VAST_4.3.pdf)의 3.4.3 AdServingId는 제공한 광고의 수명과 시스템 간 이벤트를 연결하는 식별자를 설명하며, 3.7.1 UniversalAdId는 소재 식별을 별도로 다룬다. 이는 동영상 VAST의 구체적인 규격이며 이번 이미지 배너의 JSON 필드에 그대로 적용하는 표준은 아니다. 식별자가 무엇을 구분하는지 계약으로 정해야 한다는 참고 사례다.
 
-현재 프로젝트의 서버 adId는 응답값으로 전달한다. 로컬 중복 억제에는 이미지 준비까지 끝난 SDK 로드마다 발급하는 loadId를 사용한다. 같은 adId의 응답도 새로운 로드라면 다시 가시 조건과 연속 시간을 확인한다. 한 로드의 반복 show에서는 loadId를 유지한다. SDK가 같은 소재의 재선정을 무효 노출로 판정하지 않는다.
+현재 프로젝트는 사용자 결정으로 adId를 서버가 광고 응답마다 발급하는 고유 식별값으로 정의했다. 같은 소재를 새로 제공하면 adId도 달라진다. SDK 내부의 loadId는 제거하고 한 View에서 adId별로 최초 노출 조건 충족 여부를 판정한다. 같은 adId를 다시 받거나 반복 show하면 같은 광고로 판단해 진행 시간과 판정 이력을 유지한다. 이 정의는 프로젝트의 서버 계약이며 모든 광고 시스템의 adId 필드에 적용하는 규칙이 아니다. 변경 근거는 [D-021](decisions.md#d-021--adid-정의-확정과-loadid-제거)에 기록한다.
 
-이 로컬 식별값은 서버 제공 건의 유효성을 증명하거나 전역 집계를 보장하지 않는다. [AdMob의 무효 트래픽 설명](https://support.google.com/admob/answer/3342054?hl=en)도 인위적으로 노출을 늘리는 행위를 별도 문제로 다룬다. SDK의 중복 콜백 억제와 서버의 유효성 확인, 반복 요청 남용 대응, 최종 집계와 과금을 구분한다. 서버가 응답했다는 사실만으로 모든 반복 로드의 과금이 인정된다고 해석하지 않는다.
+adId로 관리하는 로컬 판정 이력은 서버 제공 건의 유효성을 증명하거나 전역 집계를 보장하지 않는다. [AdMob의 무효 트래픽 설명](https://support.google.com/admob/answer/3342054?hl=en)도 인위적으로 노출을 늘리는 행위를 별도 문제로 다룬다. SDK의 중복 콜백 억제와 서버의 유효성 확인, 반복 요청 남용 대응, 최종 집계와 과금을 구분한다. 서버가 응답했다는 사실만으로 모든 반복 로드의 과금이 인정된다고 해석하지 않는다.
 
 ### 반복 표시와 노출 중복, 무효 트래픽
 
 2026-11-25 확인한 [AdMob 배너 가이드](https://developers.google.com/admob/android/next-gen/banner)는 로드 완료와 별개로 onAdImpression 이벤트를 제공한다. [AdMob 무효 트래픽 설명](https://support.google.com/admob/answer/3342054?hl=en)은 광고 비용이나 매체 수익을 인위적으로 부풀리는 클릭과 노출을 무효 트래픽에 포함한다. [공식 FAQ](https://support.google.com/admob/answer/1348754?hl=en)는 전문가와 자동 시스템이 이상 활동을 탐지하고 검토한다고 설명한다. 구체적인 중복 제거 키나 부정 탐지 알고리즘이 공개됐다고 해석하지 않는다.
+
+2026-11-27 추가 확인: Next-Gen의 공통 [AdEventCallback](https://developers.google.com/admob/android/next-gen/reference/com/google/android/libraries/ads/mobile/sdk/common/AdEventCallback)에 onAdImpression()이 정의돼 있다. 공식 설명은 광고의 노출이 기록됐을 때 호출하는 콜백이라는 뜻이다. [BannerAdEventCallback](https://developers.google.com/admob/android/next-gen/reference/com/google/android/libraries/ads/mobile/sdk/banner/BannerAdEventCallback)은 이를 상속하며, 배너 가이드는 로드 완료된 BannerAd의 adEventCallback에 구현을 등록하는 예제를 제공한다. 반면 [MediationAdCallback.reportAdImpression()](https://developers.google.com/admob/android/next-gen/reference/com/google/android/gms/ads/mediation/MediationAdCallback)은 미디에이션 어댑터가 Google SDK에 노출 발생을 보고하는 메서드다. 앱이 수신하는 콜백과 호출 방향을 구분한다. 공통 인터페이스의 설명만으로 프로젝트의 50%와 연속 1초 정책이 Google의 내부 판정과 같다고 판단하지 않는다. 이번 확인으로 프로젝트 API를 변경하지 않았다.
+
+광고 표시 관련 콜백도 형식에 따라 구분한다. Next-Gen의 [PictureInPictureAdEventCallback](https://developers.google.com/admob/android/next-gen/reference/com/google/android/libraries/ads/mobile/sdk/pip/PictureInPictureAdEventCallback)은 실험 API이며, PiP 광고가 화면에 나타날 때 onAdShown(), 화면에서 제거될 때 onAdHidden()을 호출한다. 이 인터페이스는 노출 기록을 뜻하는 onAdImpression()도 상속한다. 공통 [AdEventCallback.onAdShowedFullScreenContent()](https://developers.google.com/admob/android/next-gen/reference/com/google/android/libraries/ads/mobile/sdk/common/AdEventCallback#onAdShowedFullScreenContent())은 전체 화면 광고나 확장 광고, 광고 선택사항 화면 등 화면을 덮는 오버레이가 열렸을 때의 콜백이다. 일반 배너의 최초 광고 표시 완료를 뜻하는 콜백으로 해석하지 않는다. 이 설명만으로 광고 표시 콜백과 노출 콜백의 호출 순서나 노출 판정 조건을 단정하지 않는다. 프로젝트의 onShowSuccess()는 준비 완료된 광고 이미지를 View에 반영한 결과이므로, 실제 화면에 나타났다는 Google의 콜백과 일대일로 대응하지 않는다.
 
 프로젝트 설계 후보는 세 경계를 분리한다. 표시 명령 결과, 노출 조건을 충족한 논리적 이벤트, 서버가 유효하게 받아 집계한 건수는 각각 다르다. 동일 제공 건의 반복 이벤트를 제거해도 새 제공 건을 계속 만들어 내는 악용까지 해결하지는 못한다. 서버 발급 제공 건의 유효성 확인과 중복 제거도 실제 화면 노출의 증명은 아니므로 별도 검증과 이상 활동 분석이 필요하다. 한 소재당 무조건 한 번이라는 규칙으로 일반화하지 않으며, 제공 건의 집계 단위는 제품 계약으로 정한다.
 

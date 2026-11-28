@@ -22,6 +22,7 @@ internal class BannerImageLoader(
             .scale(Scale.FIT)
             .allowHardware(false)
             .build()
+
         return when (val result = imageLoader.execute(request)) {
             is SuccessResult -> result.drawable
             is ErrorResult -> throw BannerLoadException(

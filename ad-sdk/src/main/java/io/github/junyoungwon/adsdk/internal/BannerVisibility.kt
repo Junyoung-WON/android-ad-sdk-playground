@@ -51,6 +51,7 @@ internal fun ImageView.visibleImageFraction(): Float {
  */
 private fun ImageView.isImpressionObservationAllowed(): Boolean {
     if (!isAttachedToWindow || !isShown || windowVisibility != View.VISIBLE || !hasWindowFocus()) return false
+
     var ancestor: View? = this
     while (ancestor != null) {
         if (ancestor.visibility != View.VISIBLE || ancestor.alpha <= 0f ||

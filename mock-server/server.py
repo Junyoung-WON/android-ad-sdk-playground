@@ -94,6 +94,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_body(400)
             return
         image = "broken.png" if scenario == "image-failure" else "banner.png"
+        # 같은 이미지라도 새로 제공한 광고 응답은 다른 adId로 구분한다.
         payload = {
             "adId": str(uuid4()),
             "imageUrl": f"http://{self.headers['Host']}/{image}",

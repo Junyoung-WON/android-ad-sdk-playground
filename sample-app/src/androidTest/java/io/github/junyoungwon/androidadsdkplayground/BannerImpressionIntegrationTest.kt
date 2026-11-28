@@ -99,20 +99,33 @@ class BannerImpressionIntegrationTest {
     }
 
     @Test
-    fun 같은_adId와_이미지라도_새로_로드해_show하면_onImpression을_다시_호출한다() {
-        load("same-ad")
+    fun 같은_이미지라도_새_adId로_로드해_광고_표시하면_onImpression을_다시_호출한다() {
+        load("first-response")
         scenario.onActivity { show() }
         val first = awaitImpressionCallback()
 
-        // 서버가 같은 ID와 같은 PNG를 다시 반환해도 별도로 로드 완료된 광고다.
-        load("same-ad")
+        // load 헬퍼는 같은 PNG를 제공한다. 새로 제공한 광고는 서버가 다른 adId로 구분한다.
+        load("second-response")
         assertNoImpressionCallback() // 새 광고를 아직 show하지 않았으므로 onImpression을 추가 호출하지 않는다.
         scenario.onActivity { show() }
         val second = awaitImpressionCallback()
-        assertEquals(first, second) // 메타데이터는 같아도 두 번의 로드에 각각 onImpression이 호출돼야 한다.
+        assertEquals("first-response", first.adId)
+        assertEquals("second-response", second.adId)
 
         scenario.onActivity { repeat(5) { show() } }
         assertNoImpressionCallback() // 새 load 없이 반복 show하면 onImpression을 추가 호출하지 않는다.
+    }
+
+    @Test
+    fun 같은_adId를_다시_로드해_광고_표시해도_onImpression을_추가_호출하지_않는다() {
+        load("same-response")
+        scenario.onActivity { show() }
+        assertEquals("same-response", awaitImpressionCallback().adId)
+
+        // 서버가 고유 ID 계약과 달리 같은 adId를 재사용하는 경우에도 같은 광고로 판단한다.
+        load("same-response")
+        scenario.onActivity { show() }
+        assertNoImpressionCallback()
     }
 
     @Test
